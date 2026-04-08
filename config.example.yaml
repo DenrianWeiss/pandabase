@@ -1,0 +1,56 @@
+database:
+  host: localhost
+  port: "5432"
+  user: pandabase
+  password: pandabase
+  name: pandabase
+  ssl_mode: disable
+  log_level: error
+
+redis:
+  host: localhost
+  port: "6379"
+  password: ""
+  db: 0
+
+# File storage configuration
+storage:
+  type: filesystem  # Options: filesystem, memory
+  data_path: ./data/files  # Path for storing uploaded files
+  max_file_size: 100  # Maximum file size in MB
+
+server:
+  host: 0.0.0.0
+  port: "8080"
+
+log:
+  level: info
+  format: json
+
+# Embedding configuration
+# IMPORTANT: The dimensions value CANNOT be changed after database initialization!
+embedding:
+  # API endpoint - supports any OpenAI-compatible API
+  # Examples:
+  #   - OpenAI: https://api.openai.com/v1
+  #   - OpenRouter: https://openrouter.ai/api/v1
+  #   - Doubao/Volcano: https://ark.cn-beijing.volces.com/api/v3
+  api_url: https://api.openai.com/v1
+  
+  # Model name - depends on your API provider
+  # Examples:
+  #   - OpenAI: text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large
+  #   - OpenRouter: qwen/qwen3-embedding-8b
+  #   - Doubao: doubao-embedding-vision-250615 (multimodal), doubao-embedding-text-240715
+  model: text-embedding-ada-002
+  
+  # Embedding dimensions - must match your model
+  # Common values: 1536 (OpenAI), 4096 (Qwen), 2048 (Doubao)
+  dimensions: 1536
+  
+  # Multimodal mode (Doubao only)
+  # When enabled, uses /embeddings/multimodal endpoint for image+text support
+  enable_multimodal: false
+  
+  # API key
+  api_key: ""
