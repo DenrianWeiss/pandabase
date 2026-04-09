@@ -124,7 +124,10 @@ func (Embedding) TableName() string {
 }
 
 // GetEmbeddingColumnSQL returns the SQL for creating the embedding column with specified dimensions
-func GetEmbeddingColumnSQL(dimensions int) string {
+func GetEmbeddingColumnSQL(dimensions int, useHalfVec bool) string {
+	if useHalfVec {
+		return fmt.Sprintf("HALFVEC(%d)", dimensions)
+	}
 	return fmt.Sprintf("VECTOR(%d)", dimensions)
 }
 

@@ -300,7 +300,7 @@ func TestNewRetriever(t *testing.T) {
 	db := setupTestDB(t)
 	mockEmbedder := &MockEmbedder{dimensions: 128}
 
-	retriever := NewRetriever(db, mockEmbedder, "simple")
+	retriever := NewRetriever(db, mockEmbedder, "simple", "vector")
 	assert.NotNil(t, retriever)
 	assert.NotNil(t, retriever.db)
 	assert.NotNil(t, retriever.embedder)
@@ -313,7 +313,7 @@ func TestRetriever_VectorSearch(t *testing.T) {
 	setupTestTables(t, db, 128)
 	namespaceID, _, _ := createTestData(t, db, mockEmbedder)
 
-	retriever := NewRetriever(db, mockEmbedder, "simple")
+	retriever := NewRetriever(db, mockEmbedder, "simple", "vector")
 
 	tests := []struct {
 		name     string
@@ -392,7 +392,7 @@ func TestRetriever_FullTextSearch(t *testing.T) {
 	setupTestTables(t, db, 128)
 	namespaceID, _, _ := createTestData(t, db, mockEmbedder)
 
-	retriever := NewRetriever(db, mockEmbedder, "simple")
+	retriever := NewRetriever(db, mockEmbedder, "simple", "vector")
 
 	tests := []struct {
 		name     string
@@ -455,7 +455,7 @@ func TestRetriever_HybridSearch(t *testing.T) {
 	setupTestTables(t, db, 128)
 	namespaceID, _, _ := createTestData(t, db, mockEmbedder)
 
-	retriever := NewRetriever(db, mockEmbedder, "simple")
+	retriever := NewRetriever(db, mockEmbedder, "simple", "vector")
 
 	request := SearchRequest{
 		Query:        "deep learning neural networks",
@@ -487,7 +487,7 @@ func TestRetriever_GetChunkByID(t *testing.T) {
 	setupTestTables(t, db, 128)
 	namespaceID, documentID, chunkIDs := createTestData(t, db, mockEmbedder)
 
-	retriever := NewRetriever(db, mockEmbedder, "simple")
+	retriever := NewRetriever(db, mockEmbedder, "simple", "vector")
 
 	tests := []struct {
 		name      string
@@ -536,7 +536,7 @@ func TestRetriever_GetDocumentChunks(t *testing.T) {
 	setupTestTables(t, db, 128)
 	namespaceID, documentID, _ := createTestData(t, db, mockEmbedder)
 
-	retriever := NewRetriever(db, mockEmbedder, "simple")
+	retriever := NewRetriever(db, mockEmbedder, "simple", "vector")
 
 	results, err := retriever.GetDocumentChunks(context.Background(), documentID)
 	assert.NoError(t, err)
@@ -765,7 +765,7 @@ func TestRetriever_applyFilters(t *testing.T) {
 	setupTestTables(t, db, 128)
 	namespaceID, _, _ := createTestData(t, db, mockEmbedder)
 
-	retriever := NewRetriever(db, mockEmbedder, "simple")
+	retriever := NewRetriever(db, mockEmbedder, "simple", "vector")
 
 	// Test with source_type filter
 	request := SearchRequest{

@@ -11,6 +11,7 @@ import (
 func SetupRoutes(
 	router *gin.Engine,
 	authHandler *handlers.AuthHandler,
+	userHandler *handlers.UserHandler,
 	docHandler *handlers.DocumentHandler,
 	queueHandler *handlers.QueueHandler,
 	retrieverHandler *handlers.RetrieverHandler,
@@ -30,6 +31,7 @@ func SetupRoutes(
 		public := v1.Group("")
 		{
 			// Auth routes
+			public.GET("/auth/status", authHandler.GetStatus)
 			public.POST("/auth/register", authHandler.Register)
 			public.POST("/auth/login", authHandler.Login)
 			public.POST("/auth/refresh", authHandler.RefreshToken)
@@ -48,8 +50,18 @@ func SetupRoutes(
 			// User routes
 			protected.GET("/auth/me", authHandler.GetMe)
 
-			// Document routes
-			docs := protected.Group("/namespaces/:namespace_id/documents")
+			// Admin only routes
+			admin := protected.Group("")
+			admin.Use(authService.AdminOnly())
+			{
+				admin.GET("/users", userHandler.List)
+				admin.POST("/users", userHandler.Create)
+				admin.PUT("/users/:id", userHandler.Update)
+				admin.DELETE("/users/:id", userHandler.Delete)
+			}
+
+			// Document routes (must use :ns_id to avoid conflict with namespace :id)
+			docs := protected.Group("/namespaces/:ns_id/documents")
 			{
 				docs.GET("", docHandler.List)
 				docs.POST("", docHandler.Upload)
@@ -77,9 +89,9 @@ func SetupRoutes(
 			{
 				namespaces.GET("", nsHandler.List)
 				namespaces.POST("", nsHandler.Create)
-				namespaces.GET("/:id", nsHandler.Get)
-				namespaces.PUT("/:id", nsHandler.Update)
-				namespaces.DELETE("/:id", nsHandler.Delete)
+				namespaces.GET("/:ns_id", nsHandler.Get)
+				namespaces.PUT("/:ns_id", nsHandler.Update)
+				namespaces.DELETE("/:ns_id", nsHandler.Delete)
 			}
 			
 			// Search routes

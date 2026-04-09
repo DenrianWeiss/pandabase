@@ -1,0 +1,369 @@
+/* Pandabase Docusaurus-style CSS */
+:root {
+    /* Light Theme (Docusaurus-like) */
+    --bg-primary: #ffffff;
+    --bg-secondary: #f5f6f7;
+    --text-primary: #1c1e21;
+    --text-secondary: #606770;
+    --border: #ebedf0;
+    --accent: #357a38; /* Ancient Green */
+    --accent-hover: #2e6931;
+    --danger: #fa383e;
+    --success: #00a400;
+    --sidebar-bg: #f5f6f7;
+    --card-bg: #ffffff;
+    --glass-bg: rgba(255, 255, 255, 0.8);
+    --glass-border: rgba(0, 0, 0, 0.1);
+    
+    /* Status Colors */
+    --status-pending-bg: #fff3cd;
+    --status-pending-text: #856404;
+    --status-processing-bg: #cce5ff;
+    --status-processing-text: #004085;
+    --status-completed-bg: #d4edda;
+    --status-completed-text: #155724;
+    --status-failed-bg: #f8d7da;
+    --status-failed-text: #721c24;
+}
+
+[data-theme='dark'] {
+    /* Dark Theme (Docusaurus-like) */
+    --bg-primary: #18191a;
+    --bg-secondary: #242526;
+    --text-primary: #f5f6f7;
+    --text-secondary: #b3b3b3;
+    --border: #3e4144;
+    --accent: #4caf50;
+    --accent-hover: #45a049;
+    --sidebar-bg: #1b1b1d;
+    --card-bg: #242526;
+    --glass-bg: rgba(24, 25, 26, 0.8);
+    --glass-border: rgba(255, 255, 255, 0.1);
+
+    --status-pending-bg: #3e3314;
+    --status-pending-text: #fbbf24;
+    --status-processing-bg: #1e293b;
+    --status-processing-text: #60a5fa;
+}
+
+* {
+    box-sizing: border-box;
+    transition: background-color 0.2s, color 0.1s, border-color 0.2s;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+}
+
+h1, h2, h3 {
+    font-weight: 700;
+    margin-top: 0;
+}
+
+/* Layout */
+.dashboard-wrapper {
+    display: flex;
+    height: 100vh;
+}
+
+.sidebar {
+    width: 280px;
+    background-color: var(--sidebar-bg);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 1.5rem;
+}
+
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}
+
+.topbar {
+    height: 60px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2rem;
+    background-color: var(--bg-primary);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+/* Sidebar Elements */
+.brand {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--accent);
+    margin-bottom: 2rem;
+}
+
+.nav-links {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    flex: 1;
+}
+
+.nav-links li {
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.25rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.nav-links li:hover {
+    background-color: var(--border);
+    color: var(--text-primary);
+}
+
+.nav-links li.active {
+    background-color: rgba(53, 122, 56, 0.1);
+    color: var(--accent);
+}
+
+.user-profile {
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* Buttons */
+button {
+    font-family: inherit;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: 1px solid transparent;
+}
+
+.btn-primary {
+    background-color: var(--accent);
+    color: white;
+    padding: 0.6rem 1.2rem;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background-color: var(--accent-hover);
+    transform: translateY(-1px);
+}
+
+.btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 0.4rem 0.8rem;
+}
+
+.btn-text {
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    padding: 0.2rem 0.4rem;
+}
+
+.btn-text:hover {
+    text-decoration: underline;
+}
+
+/* Glassmorphism Cards */
+.glass-card {
+    background: var(--glass-bg);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+.glass-panel {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+/* Forms */
+.form-group {
+    margin-bottom: 1.25rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+input, select {
+    width: 100%;
+    padding: 0.6rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+
+input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(53, 122, 56, 0.2);
+}
+
+/* Login/Onboarding */
+.login-wrapper {
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+}
+
+.login-card {
+    width: 100%;
+    max-width: 420px;
+    padding: 2.5rem;
+}
+
+.logo-area {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.logo-title {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+}
+
+.logo-area h1 {
+    color: var(--accent);
+    margin: 0;
+}
+
+.logo-area p {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-top: 0.5rem;
+}
+
+/* Tables */
+.view-area {
+    padding: 2rem;
+}
+
+.table-container {
+    margin-top: 1.5rem;
+    overflow-x: auto;
+}
+
+.doc-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+
+.doc-table th {
+    padding: 1rem;
+    background-color: var(--bg-secondary);
+    font-weight: 700;
+    border-bottom: 1px solid var(--border);
+}
+
+.doc-table td {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+/* Status Badges */
+.status-badge {
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.status-pending { background: var(--status-pending-bg); color: var(--status-pending-text); }
+.status-processing { background: var(--status-processing-bg); color: var(--status-processing-text); }
+.status-completed { background: var(--status-completed-bg); color: var(--status-completed-text); }
+.status-failed { background: var(--status-failed-bg); color: var(--status-failed-text); }
+
+/* Theme Toggle */
+.theme-switch-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.theme-switch-btn:hover {
+    color: var(--accent);
+}
+
+/* Upload Modal Styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    width: 90%;
+    max-width: 600px;
+    background: var(--bg-primary);
+    padding: 2rem;
+    position: relative;
+}
+
+.upload-drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 2rem;
+    text-align: center;
+    cursor: pointer;
+    margin-bottom: 1rem;
+}
+
+.upload-drop-zone:hover, .upload-drop-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(53, 122, 56, 0.05);
+}
+
+/* Existing modal overrides merge */
+.modal-large { max-width: 900px !important; max-height: 80vh; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
+.doc-info { display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem; background: var(--bg-secondary); border-radius: 8px; font-size: 0.875rem; color: var(--text-secondary); margin: 1rem 0;}
+.doc-content { flex: 1; overflow-y: auto; max-height: 50vh; background: var(--bg-secondary); border-radius: 8px; padding: 1rem; }
+.doc-content pre { margin: 0; white-space: pre-wrap; word-wrap: break-word; font-family: monospace; font-size: 0.875rem; color: var(--text-primary); }

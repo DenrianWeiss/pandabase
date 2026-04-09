@@ -143,3 +143,13 @@ func (h *AuthHandler) GetOAuthProviders(c *gin.Context) {
 	providers := h.oauthService.GetEnabledProviders()
 	c.JSON(http.StatusOK, gin.H{"providers": providers})
 }
+
+// GetStatus returns the initialization status of the system
+func (h *AuthHandler) GetStatus(c *gin.Context) {
+	initialized, err := h.service.IsInitialized(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"initialized": initialized})
+}

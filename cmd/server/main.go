@@ -24,6 +24,7 @@ import (
 	"pandabase/internal/namespace"
 	"pandabase/internal/queue"
 	"pandabase/internal/retriever"
+	"pandabase/internal/setup"
 	"pandabase/internal/storage"
 	"pandabase/pkg/plugin"
 	"pandabase/web"
@@ -35,8 +36,20 @@ func main() {
 	logger.SetFormatter(&logrus.JSONFormatter{})
 	logger.SetLevel(logrus.InfoLevel)
 
-	// Load configuration
+	// Determine config path
 	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = "config.yaml"
+	}
+
+	// Check if config exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		logger.Info("Configuration file not found. Starting setup wizard on :8080...")
+		startSetupMode(configPath, logger)
+		return
+	}
+
+	// Load configuration
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		logger.Fatalf("Failed to load configuration: %v", err)
@@ -51,7 +64,7 @@ func main() {
 	}
 
 	// Initialize database
-	database, err := db.New(&cfg.Database)
+	database, err := db.New(&cfg.Database, logger)
 	if err != nil {
 		logger.Fatalf("Failed to initialize database: %v", err)
 	}
@@ -101,7 +114,7 @@ func main() {
 	nsService := namespace.NewService(database.DB)
 
 	// Initialize retriever
-	ret := retriever.NewRetriever(database.DB, emb, cfg.Database.FTSDictionary)
+	ret := retriever.NewRetriever(database.DB, emb, cfg.Database.FTSDictionary, database.GetVectorType())
 
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(authService, oauthService)
@@ -109,6 +122,7 @@ func main() {
 	queueHandler := handlers.NewQueueHandler(queueInspector)
 	retrieverHandler := handlers.NewRetrieverHandler(ret)
 	nsHandler := handlers.NewNamespaceHandler(nsService)
+	userHandler := handlers.NewUserHandler(authService)
 
 	// Setup Gin router
 	gin.SetMode(gin.ReleaseMode)
@@ -117,7 +131,7 @@ func main() {
 	router.Use(loggingMiddleware(logger))
 
 	// Setup routes
-	api.SetupRoutes(router, authHandler, docHandler, queueHandler, retrieverHandler, nsHandler, authService, oauthService)
+	api.SetupRoutes(router, authHandler, userHandler, docHandler, queueHandler, retrieverHandler, nsHandler, authService, oauthService)
 
 	// Setup embed frontend
 	web.RegisterFrontend(router)
@@ -256,5 +270,36 @@ func buildAuthConfig(cfg *config.AuthConfig) auth.Config {
 				RedirectURL:  cfg.OAuthProviders.GitHub.RedirectURL,
 			},
 		},
+	}
+}
+
+func startSetupMode(configPath string, logger *logrus.Logger) {
+	gin.SetMode(gin.ReleaseMode)
+	router := gin.New()
+	router.Use(gin.Recovery())
+
+	// Simple logging for setup mode
+	router.Use(func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		logger.Infof("%s %s %d %v", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), time.Since(start))
+	})
+
+	handler := setup.NewSetupHandler(configPath)
+	handler.RegisterRoutes(router)
+
+	// Add a redirect from root to setup
+	router.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusTemporaryRedirect, "/setup")
+	})
+
+	server := &http.Server{
+		Addr:    "0.0.0.0:8080",
+		Handler: router,
+	}
+
+	logger.Info("Setup wizard is available at http://localhost:8080/setup")
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Fatalf("Setup server failed: %v", err)
 	}
 }

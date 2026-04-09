@@ -161,70 +161,122 @@ func (p *Processor) handleDocumentProcess(ctx context.Context, task *asynq.Task)
 
 	logger.WithField("chunk_count", len(chunks)).Info("Document chunked")
 
-	// Delete existing chunks if any (for reprocessing)
-	if err := p.db.WithContext(ctx).Where("document_id = ?", payload.DocumentID).Delete(&models.Chunk{}).Error; err != nil {
-		logger.WithError(err).Warn("Failed to delete existing chunks")
+	// Find existing chunks to perform diff analysis
+	var oldChunks []models.Chunk
+	if err := p.db.WithContext(ctx).Where("document_id = ?", payload.DocumentID).Find(&oldChunks).Error; err != nil {
+		logger.WithError(err).Warn("Failed to fetch existing chunks for diff")
 	}
 
-	// Create chunks
-	dbChunks := make([]models.Chunk, len(chunks))
-	chunkContents := make([]string, len(chunks))
-	
+	// Map content to old chunks for fast lookup
+	oldMap := make(map[string][]models.Chunk)
+	for _, c := range oldChunks {
+		oldMap[c.Content] = append(oldMap[c.Content], c)
+	}
+
+	var chunksToCreate []models.Chunk
+	var chunkContentsToEmbed []string
+	var chunksToUpdate []models.Chunk
+	var oldChunkIDsToDelete []uuid.UUID
+
 	for i, chunk := range chunks {
-		dbChunks[i] = models.Chunk{
-			DocumentID: payload.DocumentID,
-			ChunkIndex: i,
-			Content:    chunk.Content,
-			Location: models.LocationInfo{
-				Type:      chunk.Location.Type,
-				URI:       chunk.Location.URI,
-				Section:   chunk.Location.Section,
-				LineStart: chunk.Location.LineStart,
-				LineEnd:   chunk.Location.LineEnd,
-				Offset:    chunk.Location.Offset,
-			},
-			TokenCount: chunker.TokenCount(chunk.Content),
-			Metadata: map[string]any{
-				"file_name":    payload.FileName,
-				"content_type": payload.ContentType,
-			},
+		var matchedOldChunk *models.Chunk
+		if list, ok := oldMap[chunk.Content]; ok && len(list) > 0 {
+			matchedOldChunk = &list[0]
+			oldMap[chunk.Content] = list[1:]
 		}
-		chunkContents[i] = chunk.Content
+
+		locationInfo := models.LocationInfo{
+			Type:      chunk.Location.Type,
+			URI:       chunk.Location.URI,
+			Section:   chunk.Location.Section,
+			LineStart: chunk.Location.LineStart,
+			LineEnd:   chunk.Location.LineEnd,
+			Offset:    chunk.Location.Offset,
+		}
+
+		metadataInfo := map[string]any{
+			"file_name":    payload.FileName,
+			"content_type": payload.ContentType,
+		}
+
+		if matchedOldChunk != nil {
+			// Update chunk in place if metadata/index changed
+			matchedOldChunk.ChunkIndex = i
+			matchedOldChunk.Location = locationInfo
+			matchedOldChunk.TokenCount = chunker.TokenCount(chunk.Content)
+			matchedOldChunk.Metadata = metadataInfo
+			chunksToUpdate = append(chunksToUpdate, *matchedOldChunk)
+		} else {
+			// New chunk
+			dbChunk := models.Chunk{
+				DocumentID: payload.DocumentID,
+				ChunkIndex: i,
+				Content:    chunk.Content,
+				Location:   locationInfo,
+				TokenCount: chunker.TokenCount(chunk.Content),
+				Metadata:   metadataInfo,
+			}
+			chunksToCreate = append(chunksToCreate, dbChunk)
+			chunkContentsToEmbed = append(chunkContentsToEmbed, chunk.Content)
+		}
 	}
 
-	// Save chunks to database
-	if err := p.db.WithContext(ctx).Create(&dbChunks).Error; err != nil {
-		p.updateDocumentStatus(ctx, payload.DocumentID, models.DocumentStatusFailed, err.Error())
-		logger.WithError(err).Error("Failed to save chunks")
-		return err
+	// Any remaining in oldMap are to be deleted
+	for _, list := range oldMap {
+		for _, c := range list {
+			oldChunkIDsToDelete = append(oldChunkIDsToDelete, c.ID)
+		}
 	}
 
-	// Generate embeddings if not skipped
-	if !payload.Options.SkipEmbedding && p.embedder != nil {
-		logger.Info("Generating embeddings")
-		
-		embeddings, err := p.embedder.Embed(ctx, chunkContents)
-		if err != nil {
+	if len(oldChunkIDsToDelete) > 0 {
+		logger.WithField("deleted_chunks", len(oldChunkIDsToDelete)).Info("Deleting removed chunks")
+		if err := p.db.WithContext(ctx).Where("id IN ?", oldChunkIDsToDelete).Delete(&models.Chunk{}).Error; err != nil {
+			logger.WithError(err).Warn("Failed to delete removed chunks")
+		}
+	}
+
+	if len(chunksToUpdate) > 0 {
+		logger.WithField("updated_chunks", len(chunksToUpdate)).Info("Updating existing chunks")
+		for _, c := range chunksToUpdate {
+			if err := p.db.WithContext(ctx).Save(&c).Error; err != nil {
+				logger.WithError(err).Warn("Failed to update chunk")
+			}
+		}
+	}
+
+	if len(chunksToCreate) > 0 {
+		logger.WithField("new_chunks", len(chunksToCreate)).Info("Creating new chunks")
+		if err := p.db.WithContext(ctx).Create(&chunksToCreate).Error; err != nil {
 			p.updateDocumentStatus(ctx, payload.DocumentID, models.DocumentStatusFailed, err.Error())
-			logger.WithError(err).Error("Failed to generate embeddings")
+			logger.WithError(err).Error("Failed to save new chunks")
 			return err
 		}
 
-		// Save embeddings
-		for i, chunk := range dbChunks {
-			embedding := models.Embedding{
-				ChunkID: chunk.ID,
-				Model:   p.embedder.Model(),
-			}
+		// Generate embeddings if not skipped
+		if !payload.Options.SkipEmbedding && p.embedder != nil {
+			logger.Info("Generating embeddings for new chunks")
 			
-			// The actual vector will be set by the database layer
-			// We need to use raw SQL or a custom method to insert the vector
-			if err := p.saveEmbedding(ctx, embedding, embeddings[i]); err != nil {
-				logger.WithError(err).Warn("Failed to save embedding for chunk")
+			embeddings, err := p.embedder.Embed(ctx, chunkContentsToEmbed)
+			if err != nil {
+				p.updateDocumentStatus(ctx, payload.DocumentID, models.DocumentStatusFailed, err.Error())
+				logger.WithError(err).Error("Failed to generate embeddings")
+				return err
 			}
-		}
 
-		logger.WithField("embedding_count", len(embeddings)).Info("Embeddings generated")
+			// Save embeddings
+			for i, chunk := range chunksToCreate {
+				embedding := models.Embedding{
+					ChunkID: chunk.ID,
+					Model:   p.embedder.Model(),
+				}
+				
+				if err := p.saveEmbedding(ctx, embedding, embeddings[i]); err != nil {
+					logger.WithError(err).Warn("Failed to save embedding for chunk")
+				}
+			}
+
+			logger.WithField("embedding_count", len(embeddings)).Info("New embeddings generated")
+		}
 	}
 
 	// Update document status
@@ -286,7 +338,7 @@ func (p *Processor) handleDocumentDelete(ctx context.Context, task *asynq.Task) 
 	}
 
 	// Delete document
-	if err := p.db.WithContext(ctx).Delete(&doc).Error; err != nil {
+	if err := p.db.WithContext(ctx).Unscoped().Delete(&doc).Error; err != nil {
 		logger.WithError(err).Error("Failed to delete document")
 		return err
 	}

@@ -174,7 +174,7 @@ func TestSearchAPI_Integration(t *testing.T) {
 	namespaceID, docID, chunkIDs := createRealTestData(t, db, realEmbedder)
 
 	// Setup Retriever
-	ret := retriever.NewRetriever(db, realEmbedder, "simple")
+	ret := retriever.NewRetriever(db, realEmbedder, "simple", "vector")
 
 	// Setup Router
 	gin.SetMode(gin.TestMode)

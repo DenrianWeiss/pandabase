@@ -78,8 +78,9 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, texts []string) ([][]float32
 // embedBatch sends a single batch to the standard OpenAI API
 func (e *OpenAIEmbedder) embedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	requestBody := map[string]interface{}{
-		"model": e.model,
-		"input": texts,
+		"model":      e.model,
+		"input":      texts,
+		"dimensions": e.dimensions,
 	}
 
 	jsonBody, err := json.Marshal(requestBody)

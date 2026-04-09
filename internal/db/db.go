@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/sirupsen/logrus"
 	"pandabase/internal/config"
 	"pandabase/internal/db/models"
 )
@@ -19,10 +20,12 @@ type DB struct {
 	*gorm.DB
 	dimensions    int
 	ftsDictionary string
+	useHalfVec    bool
+	logger        *logrus.Logger
 }
 
 // New creates a new database connection
-func New(cfg *config.DatabaseConfig) (*DB, error) {
+func New(cfg *config.DatabaseConfig, appLogger *logrus.Logger) (*DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s user=%s password=%s dbname=%s port=%s sslmode=%s",
 		cfg.Host, cfg.User, cfg.Password, cfg.Name, cfg.Port, cfg.SSLMode,
@@ -56,13 +59,22 @@ func New(cfg *config.DatabaseConfig) (*DB, error) {
 		ftsDict = "simple"
 	}
 
-	return &DB{DB: db, ftsDictionary: ftsDict}, nil
+	return &DB{DB: db, ftsDictionary: ftsDict, useHalfVec: cfg.UseHalfVec, logger: appLogger}, nil
 }
 
 // Initialize sets up the database with the configured embedding dimension
 // This must be called after New() and before using the database
 func (db *DB) Initialize(dimensions int) error {
 	db.dimensions = dimensions
+
+	// Check for index support and warnings
+	if dimensions > 2000 && dimensions <= 4000 {
+		if !db.useHalfVec {
+			db.logger.Warnf("Embedding dimension is %d (> 2000). To enable HNSW indexing, please configure 'database.use_halfvec: true' to use half-precision vectors.", dimensions)
+		}
+	} else if dimensions > 4000 {
+		db.logger.Warnf("Embedding dimension is %d (> 4000). pgvector does not support ANN indexing for dimensions this large. Search will use sequential scans.", dimensions)
+	}
 
 	// Enable pgvector extension
 	if err := db.enablePgvector(); err != nil {
@@ -136,13 +148,13 @@ func (db *DB) validateAndSetDimension(dimensions int) error {
 
 // migrate runs database migrations with dynamic vector column
 func (db *DB) migrate() error {
-	// Migrate base tables (without vector column)
+	// Migrate base tables (order matters due to foreign keys)
 	if err := db.AutoMigrate(
+		&models.User{},
 		&models.Namespace{},
+		&models.NamespaceMember{},
 		&models.Document{},
 		&models.Chunk{},
-		&models.User{},
-		&models.NamespaceMember{},
 	); err != nil {
 		return fmt.Errorf("failed to migrate base tables: %w", err)
 	}
@@ -171,7 +183,7 @@ func (db *DB) createEmbeddingsTable() error {
 
 	if count == 0 {
 		// Table doesn't exist, create it with the correct dimension
-		vectorType := models.GetEmbeddingColumnSQL(db.dimensions)
+		vectorType := models.GetEmbeddingColumnSQL(db.dimensions, db.useHalfVec)
 		createSQL := fmt.Sprintf(`
 			CREATE TABLE embeddings (
 				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -234,12 +246,30 @@ func (db *DB) createIndexes() error {
 		`CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash)`,
 		`CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_embeddings_chunk_id ON embeddings(chunk_id)`,
-		// HNSW index for vector similarity search
-		`CREATE INDEX IF NOT EXISTS idx_embeddings_embedding ON embeddings USING hnsw (embedding vector_cosine_ops)`,
-		// Full-text search index
+	}
+
+	// HNSW indexing support:
+	// - Standard vector: max 2000 dimensions
+	// - Halfvec: max 4000 dimensions (requires pgvector 0.8.0+)
+	canIndex := false
+	if db.useHalfVec && db.dimensions <= 4000 {
+		canIndex = true
+	} else if !db.useHalfVec && db.dimensions <= 2000 {
+		canIndex = true
+	}
+
+	if canIndex {
+		opsClass := "vector_cosine_ops"
+		if db.useHalfVec {
+			opsClass = "halfvec_cosine_ops"
+		}
+		indexes = append(indexes, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_embeddings_embedding ON embeddings USING hnsw (embedding %s)`, opsClass))
+	}
+
+	indexes = append(indexes,
 		`DROP INDEX IF EXISTS idx_chunks_content_fts`, // Recreate to ensure correct dictionary
 		fmt.Sprintf(`CREATE INDEX idx_chunks_content_fts ON chunks USING GIN (to_tsvector('%s', content))`, dict),
-	}
+	)
 
 	for _, sql := range indexes {
 		if err := db.Exec(sql).Error; err != nil {
@@ -276,6 +306,14 @@ func (db *DB) GetDimensions() int {
 	return db.dimensions
 }
 
+// GetVectorType returns the SQL type name for embeddings (vector or halfvec)
+func (db *DB) GetVectorType() string {
+	if db.useHalfVec {
+		return "halfvec"
+	}
+	return "vector"
+}
+
 // InsertEmbedding inserts an embedding vector with the correct dimension
 func (db *DB) InsertEmbedding(ctx context.Context, chunkID string, model string, vector []float32) error {
 	if len(vector) != db.dimensions {
@@ -292,9 +330,14 @@ func (db *DB) InsertEmbedding(ctx context.Context, chunkID string, model string,
 	}
 	vectorStr += "]"
 
-	sql := `
+	vectorType := "vector"
+	if db.useHalfVec {
+		vectorType = "halfvec"
+	}
+
+	sql := fmt.Sprintf(`
 		INSERT INTO embeddings (chunk_id, embedding, model, created_at)
-		VALUES (?, ?::vector, ?, NOW())
-	`
+		VALUES (?, ?::%s, ?, NOW())
+	`, vectorType)
 	return db.WithContext(ctx).Exec(sql, chunkID, vectorStr, model).Error
 }

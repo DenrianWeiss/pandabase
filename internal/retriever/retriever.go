@@ -110,20 +110,25 @@ type SearchResponse struct {
 
 // Retriever performs document retrieval using various search strategies
 type Retriever struct {
-	db       *gorm.DB
-	embedder plugin.Embedder
-	ftsDict  string
+	db         *gorm.DB
+	embedder   plugin.Embedder
+	ftsDict    string
+	vectorType string
 }
 
 // NewRetriever creates a new retriever instance
-func NewRetriever(db *gorm.DB, embedder plugin.Embedder, ftsDict string) *Retriever {
+func NewRetriever(db *gorm.DB, embedder plugin.Embedder, ftsDict string, vectorType string) *Retriever {
 	if ftsDict == "" {
 		ftsDict = "simple"
 	}
+	if vectorType == "" {
+		vectorType = "vector"
+	}
 	return &Retriever{
-		db:       db,
-		embedder: embedder,
-		ftsDict:  ftsDict,
+		db:         db,
+		embedder:   embedder,
+		ftsDict:    ftsDict,
+		vectorType: vectorType,
 	}
 }
 
@@ -185,7 +190,7 @@ func (r *Retriever) buildVectorSearchQuery(req SearchRequest, queryVector []floa
 
 	// Base query with all necessary joins
 	query := r.db.Table("embeddings AS e").
-		Select(`
+		Select(fmt.Sprintf(`
 			e.chunk_id as chunk_id,
 			c.document_id as document_id,
 			d.namespace_id as namespace_id,
@@ -197,13 +202,13 @@ func (r *Retriever) buildVectorSearchQuery(req SearchRequest, queryVector []floa
 			d.source_type as source_type,
 			d.source_uri as source_uri,
 			d.metadata::text as document_metadata,
-			1 - (e.embedding <=> ?::vector) as vector_score,
-			e.embedding <=> ?::vector as vector_distance
-		`, vectorStr, vectorStr).
+			1 - (e.embedding <=> ?::%[1]s) as vector_score,
+			e.embedding <=> ?::%[1]s as vector_distance
+		`, r.vectorType), vectorStr, vectorStr).
 		Joins("JOIN chunks c ON c.id = e.chunk_id").
 		Joins("JOIN documents d ON d.id = c.document_id").
 		Where("d.status = ?", models.DocumentStatusCompleted).
-		Order(fmt.Sprintf("e.embedding <=> '%s'::vector", vectorStr)).
+		Order(fmt.Sprintf("e.embedding <=> '%s'::%s", vectorStr, r.vectorType)).
 		Limit(req.TopK * 2) // Fetch more for filtering
 
 	// Apply namespace filter

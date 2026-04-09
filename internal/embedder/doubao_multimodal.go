@@ -48,8 +48,9 @@ func (e *DoubaoMultimodalEmbedder) EmbedMultimodal(ctx context.Context, inputs [
 
 	// Build request for Doubao multimodal endpoint
 	requestBody := map[string]interface{}{
-		"model": e.model,
-		"input": inputs,
+		"model":      e.model,
+		"input":      inputs,
+		"dimensions": e.dimensions,
 	}
 
 	jsonBody, err := json.Marshal(requestBody)

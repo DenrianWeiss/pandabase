@@ -3,6 +3,7 @@ package db
 import (
 	"testing"
 
+	"github.com/sirupsen/logrus"
 	"pandabase/internal/config"
 	"pandabase/internal/db/models"
 )
@@ -14,6 +15,7 @@ func TestNew(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
+	logger := logrus.New()
 	cfg := &config.DatabaseConfig{
 		Host:     "localhost",
 		Port:     "5432",
@@ -24,7 +26,7 @@ func TestNew(t *testing.T) {
 		LogLevel: "error",
 	}
 
-	db, err := New(cfg)
+	db, err := New(cfg, logger)
 	if err != nil {
 		t.Fatalf("Failed to create database connection: %v", err)
 	}
@@ -57,7 +59,8 @@ func TestValidateAndSetDimension(t *testing.T) {
 	}
 
 	// First connection - set dimension
-	db1, err := New(cfg)
+	logger := logrus.New()
+	db1, err := New(cfg, logger)
 	if err != nil {
 		t.Fatalf("Failed to create first connection: %v", err)
 	}
@@ -76,7 +79,7 @@ func TestValidateAndSetDimension(t *testing.T) {
 	db1.Close()
 
 	// Second connection - same dimension should work
-	db2, err := New(cfg)
+	db2, err := New(cfg, logger)
 	if err != nil {
 		t.Fatalf("Failed to create second connection: %v", err)
 	}
@@ -87,7 +90,7 @@ func TestValidateAndSetDimension(t *testing.T) {
 	db2.Close()
 
 	// Third connection - different dimension should fail
-	db3, err := New(cfg)
+	db3, err := New(cfg, logger)
 	if err != nil {
 		t.Fatalf("Failed to create third connection: %v", err)
 	}
@@ -112,7 +115,7 @@ func TestGetEmbeddingColumnSQL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
-			got := models.GetEmbeddingColumnSQL(tt.dimensions)
+			got := models.GetEmbeddingColumnSQL(tt.dimensions, false)
 			if got != tt.expected {
 				t.Errorf("GetEmbeddingColumnSQL(%d) = %s, want %s", tt.dimensions, got, tt.expected)
 			}

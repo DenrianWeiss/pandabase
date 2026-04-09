@@ -311,7 +311,7 @@ func convertTasks(tasks []*asynq.TaskInfo) []TaskInfo {
 			ID:       t.ID,
 			Type:     t.Type,
 			Queue:    t.Queue,
-			State:    string(t.State),
+			State:    t.State.String(),
 			MaxRetry: t.MaxRetry,
 			Retried:  t.Retried,
 		}

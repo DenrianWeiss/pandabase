@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pandabase - Vector Document Repo</title>
+    <!-- Use Google Fonts (Inter) as recommended for rich aesthetics -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- App container injected via Javascript -->
+    </div>
+    
+    <!-- We embed templates directly here to keep it vanilla HTML/JS -->
+    <template id="tpl-login">
+        <div class="login-wrapper">
+            <div class="glass-card login-card">
+                <div class="logo-area">
+                    <div class="logo-title">
+                        <h1>Pandabase</h1>
+                        <div id="theme-toggle-login" class="theme-toggle-mini"></div>
+                    </div>
+                    <p>Knowledge Retrieval & Vector Search</p>
+                </div>
+                <!-- Traditional Login Form -->
+                <form id="login-form">
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" id="email" required placeholder="you@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="password" required placeholder="••••••••">
+                    </div>
+                    <button type="submit" class="btn-primary">Sign In</button>
+                    <div id="login-error" class="error-msg"></div>
+                </form>
+                
+                <div class="divider"><span>OR</span></div>
+                
+                <!-- OAuth Login -->
+                <button id="btn-oauth-github" class="btn-secondary">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                    Continue with GitHub
+                </button>
+            </div>
+        </div>
+    </template>
+
+    <template id="tpl-register">
+        <div class="login-wrapper">
+            <div class="glass-card login-card">
+                <div class="logo-area">
+                    <h1>Pandabase</h1>
+                    <p>Onboarding: Create Administrator Account</p>
+                </div>
+                <form id="register-form">
+                    <div class="form-group">
+                        <label>Name</label>
+                        <input type="text" id="reg-name" required placeholder="Administrator Name">
+                    </div>
+                    <div class="form-group">
+                        <label>Email</label>
+                        <input type="email" id="reg-email" required placeholder="admin@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="reg-password" required placeholder="••••••••" minlength="8">
+                    </div>
+                    <button type="submit" class="btn-primary">Create Account</button>
+                    <div id="register-error" class="error-msg"></div>
+                </form>
+            </div>
+        </div>
+    </template>
+
+    <template id="tpl-dashboard">
+        <div class="dashboard-wrapper">
+            <nav class="sidebar glass-panel">
+                <div class="brand">Pandabase</div>
+                <ul class="nav-links">
+                    <li class="active" data-view="docs">Documents</li>
+                    <li data-view="search">Vector Search</li>
+                    <li id="nav-users" data-view="users" style="display:none">Users</li>
+                </ul>
+                <div class="user-profile">
+                    <span id="user-name">User</span>
+                    <button id="btn-logout" class="btn-text">Logout</button>
+                </div>
+            </nav>
+            <main class="main-content">
+                <header class="topbar">
+                    <div class="namespace-selector">
+                        <select id="ns-select"></select>
+                        <button id="btn-new-ns" class="btn-outline">+ New Workspace</button>
+                    </div>
+                    <div id="theme-toggle-dashboard" class="theme-toggle"></div>
+                </header>
+                <div id="view-container" class="view-area">
+                    <!-- Dynamic view content -->
+                </div>
+            </main>
+        </div>
+    </template>
+
+    <!-- Documents View -->
+    <template id="tpl-view-docs">
+        <div class="documents-header">
+            <h2>Documents</h2>
+            <button id="btn-upload" class="btn-primary">+ Upload Document</button>
+        </div>
+        <div class="table-container glass-panel">
+            <table class="doc-table">
+                <thead>
+                    <tr>
+                        <th>Name / Source</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="doc-list">
+                    <!-- Populated by JS -->
+                </tbody>
+            </table>
+        </div>
+    </template>
+
+    <!-- Search View -->
+    <template id="tpl-view-search">
+        <div class="search-header">
+            <h2>Vector Search</h2>
+        </div>
+        <div class="search-box glass-panel">
+            <input type="text" id="search-input" placeholder="Query the knowledge base..." />
+            <button id="btn-do-search" class="btn-primary">Search</button>
+        </div>
+        <div id="search-results" class="search-results">
+            <!-- Populated by JS -->
+        </div>
+    </template>
+
+    <!-- Users View -->
+    <template id="tpl-view-users">
+        <div class="users-header">
+            <h2>User Management</h2>
+            <button id="btn-add-user" class="btn-primary">+ Add User</button>
+        </div>
+        <div class="table-container glass-panel">
+            <table class="doc-table">
+                <thead>
+                    <tr>
+                        <th>Name / Email</th>
+                        <th>Role</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="user-list">
+                    <!-- Populated by JS -->
+                </tbody>
+            </table>
+        </div>
+    </template>
+
+    <script src="/app.js"></script>
+</body>
+</html>

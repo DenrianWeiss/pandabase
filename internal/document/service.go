@@ -224,11 +224,6 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UploadResult,
 		s.storage.Delete(ctx, oldPath)
 	}
 
-	// Delete existing chunks
-	if err := s.db.WithContext(ctx).Where("document_id = ?", req.DocumentID).Delete(&models.Chunk{}).Error; err != nil {
-		logger.WithError(err).Warn("Failed to delete existing chunks")
-	}
-
 	// Read new file content
 	content, err := io.ReadAll(req.File)
 	if err != nil {

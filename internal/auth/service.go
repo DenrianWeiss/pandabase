@@ -117,8 +117,42 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// Register creates a new user account
+// Register creates the first administrator account (only allowed if no users exist)
 func (s *Service) Register(ctx context.Context, req RegisterRequest) (*TokenResponse, error) {
+	// Check if already initialized
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&models.User{}).Count(&count).Error; err != nil {
+		return nil, fmt.Errorf("database error: %w", err)
+	}
+	if count > 0 {
+		return nil, errors.New("initial registration closed: system already initialized")
+	}
+
+	// Hash password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	// Create first user as admin
+	user := models.User{
+		Email:        req.Email,
+		PasswordHash: string(hashedPassword),
+		Name:         req.Name,
+		Role:         models.UserRoleAdmin,
+		AuthProvider: models.AuthProviderLocal,
+	}
+
+	if err := s.db.WithContext(ctx).Create(&user).Error; err != nil {
+		return nil, fmt.Errorf("failed to create user: %w", err)
+	}
+
+	// Generate tokens
+	return s.generateTokens(user)
+}
+
+// CreateUser creates a new user account (used by admins)
+func (s *Service) CreateUser(ctx context.Context, req RegisterRequest) (*models.User, error) {
 	// Check if user exists
 	var existing models.User
 	if err := s.db.WithContext(ctx).Where("email = ?", req.Email).First(&existing).Error; err == nil {
@@ -146,8 +180,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*TokenResp
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	// Generate tokens
-	return s.generateTokens(user)
+	return &user, nil
 }
 
 // Login authenticates a user
@@ -203,6 +236,10 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken string) (*Token
 	}
 
 	userIDStr, ok := claims["user_id"].(string)
+	if !ok {
+		// Refresh token uses RegisteredClaims which stores user ID in "sub"
+		userIDStr, ok = claims["sub"].(string)
+	}
 	if !ok {
 		return nil, ErrInvalidToken
 	}
@@ -333,6 +370,52 @@ func GetUserRoleFromContext(c *gin.Context) (string, bool) {
 	}
 	r, ok := role.(string)
 	return r, ok
+}
+
+// AdminOnly middleware restricts access to admins only
+func (s *Service) AdminOnly() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, ok := GetUserRoleFromContext(c)
+		if !ok || role != string(models.UserRoleAdmin) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "admin access required"})
+			return
+		}
+		c.Next()
+	}
+}
+
+// ListUsers retrieves all users
+func (s *Service) ListUsers(ctx context.Context) ([]models.User, error) {
+	var users []models.User
+	if err := s.db.WithContext(ctx).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// UpdateUser updates an existing user
+func (s *Service) UpdateUser(ctx context.Context, userID uuid.UUID, updates map[string]interface{}) error {
+	if err := s.db.WithContext(ctx).Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
+// DeleteUser deletes a user
+func (s *Service) DeleteUser(ctx context.Context, userID uuid.UUID) error {
+	if err := s.db.WithContext(ctx).Delete(&models.User{}, "id = ?", userID).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
+// IsInitialized checks if there are any users in the system
+func (s *Service) IsInitialized(ctx context.Context) (bool, error) {
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&models.User{}).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // OptionalAuth middleware allows both authenticated and unauthenticated requests

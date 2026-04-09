@@ -38,7 +38,7 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	namespaceIDStr := c.Param("namespace_id")
+	namespaceIDStr := c.Param("ns_id")
 	namespaceID, err := uuid.Parse(namespaceIDStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
@@ -90,7 +90,7 @@ func (h *DocumentHandler) Update(c *gin.Context) {
 		return
 	}
 
-	namespaceIDStr := c.Param("namespace_id")
+	namespaceIDStr := c.Param("ns_id")
 	namespaceID, err := uuid.Parse(namespaceIDStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
@@ -150,7 +150,7 @@ func (h *DocumentHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	namespaceIDStr := c.Param("namespace_id")
+	namespaceIDStr := c.Param("ns_id")
 	namespaceID, err := uuid.Parse(namespaceIDStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
@@ -176,7 +176,7 @@ func (h *DocumentHandler) Delete(c *gin.Context) {
 
 // Get handles retrieving a single document
 func (h *DocumentHandler) Get(c *gin.Context) {
-	namespaceIDStr := c.Param("namespace_id")
+	namespaceIDStr := c.Param("ns_id")
 	namespaceID, err := uuid.Parse(namespaceIDStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
@@ -201,7 +201,7 @@ func (h *DocumentHandler) Get(c *gin.Context) {
 
 // List handles listing documents in a namespace
 func (h *DocumentHandler) List(c *gin.Context) {
-	namespaceIDStr := c.Param("namespace_id")
+	namespaceIDStr := c.Param("ns_id")
 	namespaceID, err := uuid.Parse(namespaceIDStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
@@ -230,7 +230,7 @@ func (h *DocumentHandler) List(c *gin.Context) {
 
 // Download handles downloading document file
 func (h *DocumentHandler) Download(c *gin.Context) {
-	namespaceIDStr := c.Param("namespace_id")
+	namespaceIDStr := c.Param("ns_id")
 	namespaceID, err := uuid.Parse(namespaceIDStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})

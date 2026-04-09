@@ -80,7 +80,7 @@ func (h *NamespaceHandler) Get(c *gin.Context) {
 		return
 	}
 
-	idStr := c.Param("id")
+	idStr := c.Param("ns_id")
 	namespaceID, err := uuid.Parse(idStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
@@ -108,7 +108,7 @@ func (h *NamespaceHandler) Update(c *gin.Context) {
 		return
 	}
 
-	idStr := c.Param("id")
+	idStr := c.Param("ns_id")
 	namespaceID, err := uuid.Parse(idStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
@@ -138,7 +138,7 @@ func (h *NamespaceHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	idStr := c.Param("id")
+	idStr := c.Param("ns_id")
 	namespaceID, err := uuid.Parse(idStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
