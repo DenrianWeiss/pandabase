@@ -162,7 +162,10 @@ func TestSearchAPI_Integration(t *testing.T) {
 	}
 
 	// Set API Key from the prompt for testing OpenRouter
-	apiKey := "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"
+	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	if apiKey == "" {
+		t.Fatal("OPENROUTER_API_KEY environment variable is required for this test")
+	}
 	model := "qwen/qwen3-embedding-8b"
 	apiURL := "https://openrouter.ai/api/v1"
 	dimension := 4096 // For qwen/qwen3-embedding-8b
