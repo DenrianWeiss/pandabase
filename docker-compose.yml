@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   pandabase:
-    image: pandabase-server:latest
+    image: nekogawa/pandabase-server:latest
     container_name: pandabase-server
     ports:
       - "8080:8080"
