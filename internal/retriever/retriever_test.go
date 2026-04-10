@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -42,7 +43,7 @@ func (m *MockEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, 
 		vector := make([]float32, m.dimensions)
 		for j := 0; j < m.dimensions; j++ {
 			// Simple hash-based embedding for testing
-			vector[j] = float32((len(texts[i]) + j) % 100) / 100.0
+			vector[j] = float32((len(texts[i])+j)%100) / 100.0
 		}
 		results[i] = vector
 	}
@@ -87,9 +88,10 @@ func setupTestTables(t *testing.T, db *gorm.DB, dimensions int) {
 	db.Exec("DROP TABLE IF EXISTS chunks")
 	db.Exec("DROP TABLE IF EXISTS documents")
 	db.Exec("DROP TABLE IF EXISTS namespaces")
+	db.Exec("DROP TABLE IF EXISTS users")
 
 	// Create tables
-	err := db.AutoMigrate(&models.Namespace{}, &models.Document{}, &models.Chunk{})
+	err := db.AutoMigrate(&models.User{}, &models.Namespace{}, &models.Document{}, &models.Chunk{})
 	require.NoError(t, err)
 
 	// Create embeddings table with dynamic dimension
@@ -117,15 +119,24 @@ func setupTestTables(t *testing.T, db *gorm.DB, dimensions int) {
 func createTestData(t *testing.T, db *gorm.DB, embedder plugin.Embedder) (namespaceID, documentID uuid.UUID, chunkIDs []uuid.UUID) {
 	ctx := context.Background()
 
+	// Create user
+	user := models.User{
+		ID:    uuid.New(),
+		Email: "test-" + uuid.New().String() + "@example.com",
+		Name:  "Test User",
+	}
+	err := db.WithContext(ctx).Create(&user).Error
+	require.NoError(t, err)
+
 	// Create namespace
 	namespace := models.Namespace{
 		ID:          uuid.New(),
-		Name:        "test-namespace",
+		Name:        "test-namespace-" + uuid.New().String()[:8], // Unique name
 		Description: "Test namespace",
 		AccessLevel: "private",
-		OwnerID:     uuid.New(),
+		OwnerID:     user.ID,
 	}
-	err := db.WithContext(ctx).Create(&namespace).Error
+	err = db.WithContext(ctx).Create(&namespace).Error
 	require.NoError(t, err)
 
 	// Create document
@@ -350,7 +361,7 @@ func TestRetriever_VectorSearch(t *testing.T) {
 				TopK:           5,
 				Mode:           SearchModeVector,
 				NamespaceIDs:   []string{namespaceID.String()},
-				IncludeContent: false,
+				IncludeContent: boolPtr(false),
 			},
 			wantErr:  false,
 			minCount: 1,
@@ -373,12 +384,20 @@ func TestRetriever_VectorSearch(t *testing.T) {
 				for _, result := range resp.Results {
 					assert.NotEqual(t, uuid.Nil, result.ChunkID)
 					assert.NotEqual(t, uuid.Nil, result.DocumentID)
+					assert.NotEqual(t, uuid.Nil, result.Chunk.ID)
+					assert.NotEqual(t, uuid.Nil, result.Document.ID)
+					assert.Equal(t, result.ChunkID, result.Chunk.ID)
+					assert.Equal(t, result.DocumentID, result.Document.ID)
 					assert.GreaterOrEqual(t, result.VectorScore, 0.0)
 					assert.LessOrEqual(t, result.VectorScore, 1.0)
 
-					if !tt.request.IncludeContent {
+					if !tt.request.IncludeContentEnabled() {
 						assert.Empty(t, result.Chunk.Content)
+					} else {
+						assert.NotEmpty(t, result.Chunk.Content)
 					}
+					assert.GreaterOrEqual(t, result.Chunk.ChunkIndex, 0)
+					assert.NotEmpty(t, result.Document.SourceURI)
 				}
 			}
 		})
@@ -781,6 +800,35 @@ func TestRetriever_applyFilters(t *testing.T) {
 	resp, err := retriever.Search(context.Background(), request)
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
+}
+
+func TestSearchRequest_IncludeContentDefault(t *testing.T) {
+	req := SearchRequest{
+		Query: "hello",
+		TopK:  1,
+	}
+
+	err := req.Validate()
+	assert.NoError(t, err)
+	assert.True(t, req.IncludeContentEnabled())
+
+	req2 := SearchRequest{
+		Query:          "hello",
+		TopK:           1,
+		IncludeContent: boolPtr(false),
+	}
+	err = req2.Validate()
+	assert.NoError(t, err)
+	assert.False(t, req2.IncludeContentEnabled())
+}
+
+func TestClampAroundHit_MaxChars(t *testing.T) {
+	base := strings.Repeat("这是一个测试句子。", 80)
+	hit := "测试句子"
+
+	got, truncated := clampAroundHit(base, hit, 500)
+	assert.True(t, truncated)
+	assert.LessOrEqual(t, len([]rune(got)), 500)
 }
 
 // Ensure MockEmbedder implements plugin.Embedder

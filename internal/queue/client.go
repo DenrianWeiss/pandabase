@@ -33,19 +33,25 @@ type TaskPayload struct {
 // DocumentProcessPayload represents document processing task
 type DocumentProcessPayload struct {
 	TaskPayload
-	FilePath    string            `json:"file_path"`
-	FileName    string            `json:"file_name"`
-	ContentType string            `json:"content_type"`
-	Options     ProcessingOptions `json:"options"`
+	FilePath       string            `json:"file_path,omitempty"`
+	FileName       string            `json:"file_name,omitempty"`
+	ContentType    string            `json:"content_type,omitempty"`
+	SourceURL      string            `json:"source_url,omitempty"`
+	SourceMetadata map[string]any    `json:"source_metadata,omitempty"`
+	Options        ProcessingOptions `json:"options"`
 }
 
 // ProcessingOptions represents document processing options
 type ProcessingOptions struct {
-	ChunkSize      int    `json:"chunk_size"`
-	ChunkOverlap   int    `json:"chunk_overlap"`
-	ParserType     string `json:"parser_type"`     // auto, text, markdown
-	SkipEmbedding  bool   `json:"skip_embedding"`
-	ForceReprocess bool   `json:"force_reprocess"` // Force reprocess even if hash matches
+	ChunkSize        int    `json:"chunk_size"`
+	ChunkOverlap     int    `json:"chunk_overlap"`
+	ParserType       string `json:"parser_type"` // auto, text, markdown
+	SkipEmbedding    bool   `json:"skip_embedding"`
+	ForceReprocess   bool   `json:"force_reprocess"` // Force reprocess even if hash matches
+	RenderJavaScript bool   `json:"render_javascript"`
+	RenderTimeout    int    `json:"render_timeout"`
+	WaitSelector     string `json:"wait_selector,omitempty"`
+	RenderFallback   bool   `json:"render_fallback"`
 }
 
 // DocumentDeletePayload represents document deletion task
@@ -204,13 +210,13 @@ func (i *Inspector) GetQueueStats() ([]QueueStats, error) {
 
 // TaskInfo represents task information
 type TaskInfo struct {
-	ID          string    `json:"id"`
-	Type        string    `json:"type"`
-	Queue       string    `json:"queue"`
-	State       string    `json:"state"`
-	MaxRetry    int       `json:"max_retry"`
-	Retried     int       `json:"retried"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	Type      string    `json:"type"`
+	Queue     string    `json:"queue"`
+	State     string    `json:"state"`
+	MaxRetry  int       `json:"max_retry"`
+	Retried   int       `json:"retried"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // ListPendingTasks lists pending tasks in a queue

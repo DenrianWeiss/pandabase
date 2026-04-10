@@ -3,7 +3,9 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -24,6 +26,7 @@ var (
 	ErrUserExists         = errors.New("user already exists")
 	ErrInvalidToken       = errors.New("invalid token")
 	ErrUserNotFound       = errors.New("user not found")
+	ErrInvalidPassword    = errors.New("invalid password")
 )
 
 // Config holds authentication configuration
@@ -63,6 +66,19 @@ func GenerateRandomSecret() string {
 	b := make([]byte, 32)
 	rand.Read(b)
 	return base64.StdEncoding.EncodeToString(b)
+}
+
+func generatePlainAPIToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "pdb_" + base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func hashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
 }
 
 // Service handles authentication logic
@@ -107,6 +123,34 @@ type UserResponse struct {
 	Name      string    `json:"name"`
 	AvatarURL string    `json:"avatar_url,omitempty"`
 	Role      string    `json:"role"`
+}
+
+// APITokenResponse represents API token metadata returned to clients.
+type APITokenResponse struct {
+	ID         uuid.UUID  `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+// CreateAPITokenRequest represents create-token payload.
+type CreateAPITokenRequest struct {
+	Name          string `json:"name" binding:"required"`
+	ExpiresInDays int    `json:"expires_in_days,omitempty"`
+}
+
+// CreatedAPITokenResponse includes one-time plain token value.
+type CreatedAPITokenResponse struct {
+	Token     APITokenResponse `json:"token"`
+	PlainText string           `json:"plain_text"`
+}
+
+// ChangePasswordRequest represents self-service password update payload.
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required,min=8"`
 }
 
 // Claims represents JWT claims
@@ -203,6 +247,135 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*TokenResponse, 
 
 	// Generate tokens
 	return s.generateTokens(user)
+}
+
+// ChangePassword updates user's local password after verifying current password.
+func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, req ChangePasswordRequest) error {
+	var user models.User
+	if err := s.db.WithContext(ctx).First(&user, "id = ?", userID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrUserNotFound
+		}
+		return err
+	}
+
+	if user.AuthProvider != models.AuthProviderLocal {
+		return errors.New("oauth users cannot reset local password")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword)); err != nil {
+		return ErrInvalidPassword
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	return s.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", userID).
+		Update("password_hash", string(newHash)).Error
+}
+
+// CreateAPIToken creates a persistent personal access token for API clients.
+func (s *Service) CreateAPIToken(ctx context.Context, userID uuid.UUID, req CreateAPITokenRequest) (*CreatedAPITokenResponse, error) {
+	plain, err := generatePlainAPIToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate token: %w", err)
+	}
+
+	var expiresAt *time.Time
+	if req.ExpiresInDays > 0 {
+		t := time.Now().Add(time.Duration(req.ExpiresInDays) * 24 * time.Hour)
+		expiresAt = &t
+	}
+
+	prefix := plain
+	if len(prefix) > 12 {
+		prefix = prefix[:12]
+	}
+
+	record := models.APIToken{
+		UserID:    userID,
+		Name:      req.Name,
+		TokenHash: hashToken(plain),
+		Prefix:    prefix,
+		ExpiresAt: expiresAt,
+	}
+
+	if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
+		return nil, err
+	}
+
+	return &CreatedAPITokenResponse{
+		Token: APITokenResponse{
+			ID:         record.ID,
+			Name:       record.Name,
+			Prefix:     record.Prefix,
+			LastUsedAt: record.LastUsedAt,
+			ExpiresAt:  record.ExpiresAt,
+			CreatedAt:  record.CreatedAt,
+		},
+		PlainText: plain,
+	}, nil
+}
+
+// ListAPITokens lists active API tokens created by the user.
+func (s *Service) ListAPITokens(ctx context.Context, userID uuid.UUID) ([]APITokenResponse, error) {
+	var records []models.APIToken
+	if err := s.db.WithContext(ctx).
+		Where("user_id = ? AND revoked_at IS NULL", userID).
+		Order("created_at DESC").
+		Find(&records).Error; err != nil {
+		return nil, err
+	}
+
+	out := make([]APITokenResponse, 0, len(records))
+	for _, r := range records {
+		out = append(out, APITokenResponse{
+			ID:         r.ID,
+			Name:       r.Name,
+			Prefix:     r.Prefix,
+			LastUsedAt: r.LastUsedAt,
+			ExpiresAt:  r.ExpiresAt,
+			CreatedAt:  r.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+// DeleteAPIToken revokes a token that belongs to the current user.
+func (s *Service) DeleteAPIToken(ctx context.Context, userID, tokenID uuid.UUID) error {
+	now := time.Now()
+	res := s.db.WithContext(ctx).Model(&models.APIToken{}).
+		Where("id = ? AND user_id = ? AND revoked_at IS NULL", tokenID, userID).
+		Update("revoked_at", &now)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (s *Service) tryAuthenticateAPIToken(ctx context.Context, tokenString string) (*models.User, error) {
+	var record models.APIToken
+	now := time.Now()
+	err := s.db.WithContext(ctx).
+		Where("token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", hashToken(tokenString), now).
+		First(&record).Error
+	if err != nil {
+		return nil, err
+	}
+
+	_ = s.db.WithContext(ctx).Model(&models.APIToken{}).Where("id = ?", record.ID).Update("last_used_at", now).Error
+
+	var user models.User
+	if err := s.db.WithContext(ctx).First(&user, "id = ?", record.UserID).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
 }
 
 // GetUserByID retrieves a user by ID
@@ -325,30 +498,36 @@ func (s *Service) Middleware() gin.HandlerFunc {
 
 		tokenString := parts[1]
 
-		// Parse and validate token
+		// Parse and validate JWT first.
 		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
 			return []byte(s.config.JWTSecret), nil
 		})
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		if err == nil {
+			claims, ok := token.Claims.(*Claims)
+			if ok && token.Valid {
+				// Set user info in context
+				c.Set("userID", claims.UserID)
+				c.Set("userEmail", claims.Email)
+				c.Set("userRole", claims.Role)
+				c.Next()
+				return
+			}
+		}
+
+		// Fallback to persistent API token.
+		user, apiTokenErr := s.tryAuthenticateAPIToken(c.Request.Context(), tokenString)
+		if apiTokenErr == nil {
+			c.Set("userID", user.ID)
+			c.Set("userEmail", user.Email)
+			c.Set("userRole", string(user.Role))
+			c.Next()
 			return
 		}
 
-		claims, ok := token.Claims.(*Claims)
-		if !ok || !token.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token claims"})
-			return
-		}
-
-		// Set user info in context
-		c.Set("userID", claims.UserID)
-		c.Set("userEmail", claims.Email)
-		c.Set("userRole", claims.Role)
-
-		c.Next()
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 	}
 }
 

@@ -120,6 +120,29 @@ curl http://localhost:8080/api/v1/namespaces/<ns_id>/documents/<doc_id>/download
 # 删除文档（级联删除分块和嵌入）
 curl -X DELETE "http://localhost:8080/api/v1/namespaces/<ns_id>/documents/<doc_id>?cascade=true" \
   -H "Authorization: Bearer <token>"
+
+# URL 导入（支持 JS 渲染）
+curl -X POST http://localhost:8080/api/v1/namespaces/<ns_id>/documents/import \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/article",
+    "parser_type": "web",
+    "title": "Custom Title",          # 可选：手动设置标题
+    "auto_extract_title": true,       # 可选：自动提取网页标题（默认true）
+    "render_javascript": true,
+    "render_timeout": 15,
+    "wait_selector": "article",
+    "render_fallback": true,
+    "chunk_size": 1000,
+    "chunk_overlap": 100
+  }'
+
+# 更新文档标题（仅支持 web/notion 类型）
+curl -X PATCH http://localhost:8080/api/v1/namespaces/<ns_id>/documents/<doc_id>/title \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "New Document Title"}'
 ```
 
 支持的文档格式：
@@ -154,6 +177,39 @@ curl -X POST http://localhost:8080/api/v1/search \
     "mode": "fulltext"
   }'
 ```
+
+检索响应会返回命中分段邻近上下文：默认前后各 2 段并裁剪到不超过 500 字符，字段位于 `results[].context`。
+
+网页 URL 导入时，启用 `render_javascript=true` 会先抓取脚本执行后的 DOM，再进行正文抽取、切片和向量化；若渲染失败且 `render_fallback=true`，自动降级到静态抓取。
+
+### 网页标题管理
+
+导入网页内容时，支持以下标题设置方式：
+
+1. **自动提取标题**（默认）：系统从网页 HTML 中自动提取 `<title>` 标签内容
+2. **手动设置标题**：通过 `title` 字段指定自定义标题，优先级高于自动提取
+3. **后期修改**：通过 `PATCH /api/v1/namespaces/<ns_id>/documents/<doc_id>/title` 接口更新标题
+
+```bash
+# 导入时手动设置标题
+curl -X POST http://localhost:8080/api/v1/namespaces/<ns_id>/documents/import \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/article",
+    "parser_type": "web",
+    "title": "My Custom Title",
+    "auto_extract_title": false
+  }'
+
+# 后续修改标题
+curl -X PATCH http://localhost:8080/api/v1/namespaces/<ns_id>/documents/<doc_id>/title \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Updated Title"}'
+```
+
+标题将存储在文档的 `metadata.title` 字段中，并在文档列表和搜索结果中显示。
 
 检索模式：
 | 模式 | 说明 |

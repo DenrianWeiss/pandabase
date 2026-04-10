@@ -16,9 +16,12 @@ var (
 
 // ParseOptions contains options for document parsing
 type ParseOptions struct {
-	Filename     string
-	ContentType  string
-	Metadata     map[string]any
+	Filename         string
+	ContentType      string
+	Metadata         map[string]any
+	RenderJavaScript bool
+	RenderTimeout    int
+	WaitSelector     string
 }
 
 // DocumentStructure represents the structure of a document
@@ -44,8 +47,8 @@ type Element struct {
 
 // ParsedDocument represents the result of parsing a document
 type ParsedDocument struct {
-	Content   string            `json:"content"`
-	Metadata  map[string]any    `json:"metadata"`
+	Content   string             `json:"content"`
+	Metadata  map[string]any     `json:"metadata"`
 	Structure *DocumentStructure `json:"structure,omitempty"`
 }
 
@@ -53,22 +56,22 @@ type ParsedDocument struct {
 type DocumentParser interface {
 	// Name returns the parser name
 	Name() string
-	
+
 	// SupportedExtensions returns the file extensions this parser supports
 	SupportedExtensions() []string
-	
+
 	// SupportedMimeTypes returns the MIME types this parser supports
 	SupportedMimeTypes() []string
-	
+
 	// Parse parses the document from the given reader
 	Parse(ctx context.Context, source io.Reader, opts ParseOptions) (*ParsedDocument, error)
 }
 
 // LocationInfo represents the location of a chunk in the source document
 type LocationInfo struct {
-	Type      string `json:"type"`       // file, notion, webpage, etc.
-	URI       string `json:"uri"`        // Source address
-	Section   string `json:"section"`    // Section heading
+	Type      string `json:"type"`    // file, notion, webpage, etc.
+	URI       string `json:"uri"`     // Source address
+	Section   string `json:"section"` // Section heading
 	LineStart int    `json:"line_start"`
 	LineEnd   int    `json:"line_end"`
 	Offset    int    `json:"offset"`
@@ -85,7 +88,7 @@ type Chunk struct {
 type Chunker interface {
 	// Name returns the chunker name
 	Name() string
-	
+
 	// Split splits the parsed document into chunks
 	Split(ctx context.Context, doc *ParsedDocument) ([]Chunk, error)
 }
@@ -94,13 +97,13 @@ type Chunker interface {
 type Embedder interface {
 	// Name returns the embedder name
 	Name() string
-	
+
 	// Embed generates embeddings for the given texts
 	Embed(ctx context.Context, texts []string) ([][]float32, error)
-	
+
 	// Dimensions returns the dimension of the embeddings
 	Dimensions() int
-	
+
 	// Model returns the model name used for embeddings
 	Model() string
 }
@@ -116,8 +119,8 @@ type SearchOptions struct {
 
 // SearchResult represents a search result
 type SearchResult struct {
-	Chunk     Chunk   `json:"chunk"`
-	Score     float32 `json:"score"`
+	Chunk     Chunk     `json:"chunk"`
+	Score     float32   `json:"score"`
 	Embedding []float32 `json:"embedding,omitempty"`
 }
 
@@ -155,7 +158,7 @@ func (r *PluginRegistry) RegisterParser(parser DocumentParser) {
 func (r *PluginRegistry) GetParser(name string) (DocumentParser, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	parser, ok := r.parsers[name]
 	if !ok {
 		return nil, ErrParserNotFound
@@ -167,7 +170,7 @@ func (r *PluginRegistry) GetParser(name string) (DocumentParser, error) {
 func (r *PluginRegistry) GetParserForFile(filename string) (DocumentParser, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	for _, parser := range r.parsers {
 		for _, ext := range parser.SupportedExtensions() {
 			if hasSuffix(filename, ext) {
@@ -189,7 +192,7 @@ func (r *PluginRegistry) RegisterChunker(chunker Chunker) {
 func (r *PluginRegistry) GetChunker(name string) (Chunker, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	chunker, ok := r.chunkers[name]
 	if !ok {
 		return nil, errors.New("chunker not found")
@@ -208,7 +211,7 @@ func (r *PluginRegistry) RegisterEmbedder(embedder Embedder) {
 func (r *PluginRegistry) GetEmbedder(name string) (Embedder, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	embedder, ok := r.embedders[name]
 	if !ok {
 		return nil, ErrEmbedderNotFound
@@ -220,7 +223,7 @@ func (r *PluginRegistry) GetEmbedder(name string) (Embedder, error) {
 func (r *PluginRegistry) ListParsers() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	names := make([]string, 0, len(r.parsers))
 	for name := range r.parsers {
 		names = append(names, name)
@@ -232,7 +235,7 @@ func (r *PluginRegistry) ListParsers() []string {
 func (r *PluginRegistry) ListChunkers() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	names := make([]string, 0, len(r.chunkers))
 	for name := range r.chunkers {
 		names = append(names, name)
@@ -244,7 +247,7 @@ func (r *PluginRegistry) ListChunkers() []string {
 func (r *PluginRegistry) ListEmbedders() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	names := make([]string, 0, len(r.embedders))
 	for name := range r.embedders {
 		names = append(names, name)
@@ -257,8 +260,8 @@ func hasSuffix(s, suffix string) bool {
 	if len(suffix) > len(s) {
 		return false
 	}
-	return s[len(s)-len(suffix):] == suffix || 
-		   toLower(s[len(s)-len(suffix):]) == toLower(suffix)
+	return s[len(s)-len(suffix):] == suffix ||
+		toLower(s[len(s)-len(suffix):]) == toLower(suffix)
 }
 
 // toLower converts a string to lowercase

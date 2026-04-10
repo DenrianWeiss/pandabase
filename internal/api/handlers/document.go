@@ -30,6 +30,22 @@ type UploadRequest struct {
 	ForceReprocess bool   `form:"force_reprocess"`
 }
 
+// ImportRequestJSON represents document import request via URL
+type ImportRequestJSON struct {
+	URL              string `json:"url" binding:"required"`
+	Title            string `json:"title,omitempty"`
+	AutoExtractTitle bool   `json:"auto_extract_title"`
+	ParserType       string `json:"parser_type" binding:"required"`
+	NotionAPIKey     string `json:"notion_api_key,omitempty"`
+	ChunkSize        int    `json:"chunk_size"`
+	ChunkOverlap     int    `json:"chunk_overlap"`
+	SkipEmbedding    bool   `json:"skip_embedding"`
+	RenderJavaScript bool   `json:"render_javascript"`
+	RenderTimeout    int    `json:"render_timeout"`
+	WaitSelector     string `json:"wait_selector,omitempty"`
+	RenderFallback   bool   `json:"render_fallback"`
+}
+
 // Upload handles document upload
 func (h *DocumentHandler) Upload(c *gin.Context) {
 	userID, ok := auth.GetUserIDFromContext(c)
@@ -72,6 +88,61 @@ func (h *DocumentHandler) Upload(c *gin.Context) {
 			ParserType:     req.ParserType,
 			SkipEmbedding:  req.SkipEmbedding,
 			ForceReprocess: req.ForceReprocess,
+		},
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, result)
+}
+
+// Import handles document import from URL
+func (h *DocumentHandler) Import(c *gin.Context) {
+	userID, ok := auth.GetUserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	namespaceIDStr := c.Param("ns_id")
+	namespaceID, err := uuid.Parse(namespaceIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
+		return
+	}
+
+	var req ImportRequestJSON
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	metadata := make(map[string]any)
+	if req.NotionAPIKey != "" {
+		metadata["notion_api_key"] = req.NotionAPIKey
+	}
+	if req.Title != "" {
+		metadata["title"] = req.Title
+	}
+	metadata["auto_extract_title"] = req.AutoExtractTitle
+
+	result, err := h.service.ImportURL(c.Request.Context(), document.ImportRequest{
+		NamespaceID: namespaceID,
+		UserID:      userID,
+		URL:         req.URL,
+		SourceType:  req.ParserType,
+		Metadata:    metadata,
+		Options: document.UploadOptions{
+			ChunkSize:        req.ChunkSize,
+			ChunkOverlap:     req.ChunkOverlap,
+			ParserType:       req.ParserType,
+			SkipEmbedding:    req.SkipEmbedding,
+			RenderJavaScript: req.RenderJavaScript,
+			RenderTimeout:    req.RenderTimeout,
+			WaitSelector:     req.WaitSelector,
+			RenderFallback:   req.RenderFallback,
 		},
 	})
 	if err != nil {
@@ -174,6 +245,37 @@ func (h *DocumentHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "document deletion queued"})
 }
 
+// Retry handles document processing retry
+func (h *DocumentHandler) Retry(c *gin.Context) {
+	userID, ok := auth.GetUserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	namespaceIDStr := c.Param("ns_id")
+	namespaceID, err := uuid.Parse(namespaceIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
+		return
+	}
+
+	documentIDStr := c.Param("document_id")
+	documentID, err := uuid.Parse(documentIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid document ID"})
+		return
+	}
+
+	result, err := h.service.Retry(c.Request.Context(), documentID, namespaceID, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
 // Get handles retrieving a single document
 func (h *DocumentHandler) Get(c *gin.Context) {
 	namespaceIDStr := c.Param("ns_id")
@@ -209,7 +311,7 @@ func (h *DocumentHandler) List(c *gin.Context) {
 	}
 
 	status := c.Query("status")
-	
+
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
@@ -220,15 +322,54 @@ func (h *DocumentHandler) List(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"data":       docs,
-		"total":      total,
-		"page":       page,
-		"page_size":  pageSize,
+		"data":        docs,
+		"total":       total,
+		"page":        page,
+		"page_size":   pageSize,
 		"total_pages": (total + int64(pageSize) - 1) / int64(pageSize),
 	})
 }
 
-// Download handles downloading document file
+// UpdateTitleRequest represents a request to update document title
+type UpdateTitleRequest struct {
+	Title string `json:"title" binding:"required"`
+}
+
+// UpdateTitle handles updating document title
+func (h *DocumentHandler) UpdateTitle(c *gin.Context) {
+	userID, ok := auth.GetUserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	namespaceIDStr := c.Param("ns_id")
+	namespaceID, err := uuid.Parse(namespaceIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid namespace ID"})
+		return
+	}
+
+	documentIDStr := c.Param("document_id")
+	documentID, err := uuid.Parse(documentIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid document ID"})
+		return
+	}
+
+	var req UpdateTitleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.service.UpdateTitle(c.Request.Context(), documentID, namespaceID, userID, req.Title); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "title updated successfully"})
+}
 func (h *DocumentHandler) Download(c *gin.Context) {
 	namespaceIDStr := c.Param("ns_id")
 	namespaceID, err := uuid.Parse(namespaceIDStr)

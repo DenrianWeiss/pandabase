@@ -10,9 +10,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/sirupsen/logrus"
 	"pandabase/internal/config"
 	"pandabase/internal/db/models"
+
+	"github.com/sirupsen/logrus"
 )
 
 // DB wraps the GORM database connection
@@ -151,6 +152,7 @@ func (db *DB) migrate() error {
 	// Migrate base tables (order matters due to foreign keys)
 	if err := db.AutoMigrate(
 		&models.User{},
+		&models.APIToken{},
 		&models.Namespace{},
 		&models.NamespaceMember{},
 		&models.Document{},
@@ -246,6 +248,8 @@ func (db *DB) createIndexes() error {
 		`CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash)`,
 		`CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_embeddings_chunk_id ON embeddings(chunk_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_tokens_user_id ON api_tokens(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_tokens_revoked_at ON api_tokens(revoked_at)`,
 	}
 
 	// HNSW indexing support:

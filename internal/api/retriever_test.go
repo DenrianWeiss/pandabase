@@ -33,6 +33,10 @@ const (
 	testDBName     = "pandabase_test"
 )
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 func setupTestDB(t *testing.T) *gorm.DB {
 	dsn := fmt.Sprintf(
 		"host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
@@ -182,17 +186,17 @@ func TestSearchAPI_Integration(t *testing.T) {
 
 	t.Run("POST /api/v1/search - Valid Hybrid Search", func(t *testing.T) {
 		reqBody := retriever.SearchRequest{
-			Query:        "Tell me about vector databases in Postgres",
-			TopK:         3,
-			Mode:         retriever.SearchModeHybrid,
-			NamespaceIDs: []string{namespaceID.String()},
-			IncludeContent: true,
+			Query:          "Tell me about vector databases in Postgres",
+			TopK:           3,
+			Mode:           retriever.SearchModeHybrid,
+			NamespaceIDs:   []string{namespaceID.String()},
+			IncludeContent: boolPtr(true),
 		}
 
 		bodyBytes, _ := json.Marshal(reqBody)
 		req, _ := http.NewRequest(http.MethodPost, "/api/v1/search", bytes.NewBuffer(bodyBytes))
 		req.Header.Set("Content-Type", "application/json")
-		
+
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -205,7 +209,7 @@ func TestSearchAPI_Integration(t *testing.T) {
 		// Expecting at least one match related to pgvector/Postgres
 		assert.Greater(t, len(resp.Results), 0)
 		assert.Equal(t, "Tell me about vector databases in Postgres", resp.Query)
-		
+
 		// The pgvector chunk should be ranked highly
 		foundPgVector := false
 		for _, r := range resp.Results {
@@ -220,7 +224,7 @@ func TestSearchAPI_Integration(t *testing.T) {
 	t.Run("GET /api/v1/chunks/:id - Get specific chunk", func(t *testing.T) {
 		url := fmt.Sprintf("/api/v1/chunks/%s", chunkIDs[2].String())
 		req, _ := http.NewRequest(http.MethodGet, url, nil)
-		
+
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -237,7 +241,7 @@ func TestSearchAPI_Integration(t *testing.T) {
 	t.Run("GET /api/v1/documents/:id/chunks - Get document chunks", func(t *testing.T) {
 		url := fmt.Sprintf("/api/v1/documents/%s/chunks", docID.String())
 		req, _ := http.NewRequest(http.MethodGet, url, nil)
-		
+
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 

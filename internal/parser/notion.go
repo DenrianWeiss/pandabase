@@ -49,19 +49,25 @@ type NotionSource struct {
 // A .notion dummy file will be uploaded containing {"url": "...", "nonce": "..."}.
 // Different nonce allows cache busting/refetching.
 func (p *NotionParser) Parse(ctx context.Context, source io.Reader, opts plugin.ParseOptions) (*plugin.ParsedDocument, error) {
-	// Parse the .notion source file
-	data, err := io.ReadAll(source)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read notion source: %w", err)
+	var notionSrc NotionSource
+	if source != nil {
+		data, err := io.ReadAll(source)
+		if err == nil && len(data) > 0 {
+			if err := json.Unmarshal(data, &notionSrc); err != nil {
+				return nil, fmt.Errorf("invalid .notion file format: %w", err)
+			}
+		}
 	}
 
-	var notionSrc NotionSource
-	if err := json.Unmarshal(data, &notionSrc); err != nil {
-		return nil, fmt.Errorf("invalid .notion file format: %w", err)
+	// Fallback to metadata if not in file
+	if notionSrc.URL == "" {
+		if url, ok := opts.Metadata["notion_url"].(string); ok {
+			notionSrc.URL = url
+		}
 	}
 
 	if notionSrc.URL == "" {
-		return nil, errors.New("notion URL is missing in source file")
+		return nil, errors.New("notion URL is missing")
 	}
 
 	// Retrieve the API key from request metadata

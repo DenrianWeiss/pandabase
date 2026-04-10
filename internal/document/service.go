@@ -23,10 +23,10 @@ import (
 
 // Service handles document lifecycle management
 type Service struct {
-	db        *gorm.DB
-	storage   storage.Storage
-	queue     *queue.Client
-	logger    *logrus.Logger
+	db      *gorm.DB
+	storage storage.Storage
+	queue   *queue.Client
+	logger  *logrus.Logger
 }
 
 // NewService creates a new document service
@@ -50,19 +50,33 @@ type UploadRequest struct {
 
 // UploadOptions represents upload options
 type UploadOptions struct {
-	ChunkSize      int
-	ChunkOverlap   int
-	ParserType     string // auto, text, markdown
-	SkipEmbedding  bool
-	ForceReprocess bool
+	ChunkSize        int
+	ChunkOverlap     int
+	ParserType       string // auto, text, markdown
+	SkipEmbedding    bool
+	ForceReprocess   bool
+	RenderJavaScript bool
+	RenderTimeout    int
+	WaitSelector     string
+	RenderFallback   bool
 }
 
 // UploadResult represents upload result
 type UploadResult struct {
-	DocumentID uuid.UUID              `json:"document_id"`
-	Status     models.DocumentStatus  `json:"status"`
-	TaskID     string                 `json:"task_id,omitempty"`
-	Message    string                 `json:"message,omitempty"`
+	DocumentID uuid.UUID             `json:"document_id"`
+	Status     models.DocumentStatus `json:"status"`
+	TaskID     string                `json:"task_id,omitempty"`
+	Message    string                `json:"message,omitempty"`
+}
+
+// ImportRequest represents a document import request (URL based)
+type ImportRequest struct {
+	NamespaceID uuid.UUID
+	UserID      uuid.UUID
+	URL         string
+	SourceType  string // web, notion
+	Metadata    map[string]any
+	Options     UploadOptions
 }
 
 // Upload handles document upload and triggers processing
@@ -126,6 +140,9 @@ func (s *Service) Upload(ctx context.Context, req UploadRequest) (*UploadResult,
 			"file_size":         req.FileHeader.Size,
 			"uploaded_by":       req.UserID,
 			"content_type":      req.FileHeader.Header.Get("Content-Type"),
+			"chunk_size":        req.Options.ChunkSize,
+			"chunk_overlap":     req.Options.ChunkOverlap,
+			"parser_type":       req.Options.ParserType,
 		},
 	}
 
@@ -156,11 +173,15 @@ func (s *Service) Upload(ctx context.Context, req UploadRequest) (*UploadResult,
 		FileName:    req.FileHeader.Filename,
 		ContentType: req.FileHeader.Header.Get("Content-Type"),
 		Options: queue.ProcessingOptions{
-			ChunkSize:      chunkSize,
-			ChunkOverlap:   chunkOverlap,
-			ParserType:     req.Options.ParserType,
-			SkipEmbedding:  req.Options.SkipEmbedding,
-			ForceReprocess: req.Options.ForceReprocess,
+			ChunkSize:        chunkSize,
+			ChunkOverlap:     chunkOverlap,
+			ParserType:       req.Options.ParserType,
+			SkipEmbedding:    req.Options.SkipEmbedding,
+			ForceReprocess:   req.Options.ForceReprocess,
+			RenderJavaScript: req.Options.RenderJavaScript,
+			RenderTimeout:    req.Options.RenderTimeout,
+			WaitSelector:     req.Options.WaitSelector,
+			RenderFallback:   req.Options.RenderFallback,
 		},
 	}
 
@@ -181,6 +202,114 @@ func (s *Service) Upload(ctx context.Context, req UploadRequest) (*UploadResult,
 		Status:     models.DocumentStatusPending,
 		TaskID:     taskInfo.ID,
 		Message:    "Document uploaded and queued for processing",
+	}, nil
+}
+
+// ImportURL handles document ingestion via URL
+func (s *Service) ImportURL(ctx context.Context, req ImportRequest) (*UploadResult, error) {
+	logger := s.logger.WithFields(logrus.Fields{
+		"namespace_id": req.NamespaceID,
+		"user_id":      req.UserID,
+		"url":          req.URL,
+	})
+
+	logger.Info("Importing document from URL")
+
+	// Normalize render options for URL imports.
+	if req.Options.RenderJavaScript {
+		if req.Options.RenderTimeout <= 0 {
+			req.Options.RenderTimeout = 15
+		}
+		// Default to fallback for better robustness in production.
+		if !req.Options.RenderFallback {
+			req.Options.RenderFallback = true
+		}
+	}
+
+	// Check permission
+	if err := s.checkNamespacePermission(ctx, req.NamespaceID, req.UserID, "write"); err != nil {
+		return nil, err
+	}
+
+	// Create document record
+	doc := models.Document{
+		NamespaceID: req.NamespaceID,
+		SourceType:  req.SourceType,
+		SourceURI:   req.URL,
+		Status:      models.DocumentStatusPending,
+		Metadata: map[string]any{
+			"source_url":    req.URL,
+			"imported_by":   req.UserID,
+			"chunk_size":    req.Options.ChunkSize,
+			"chunk_overlap": req.Options.ChunkOverlap,
+			"parser_type":   req.Options.ParserType,
+		},
+	}
+
+	// Merge incoming metadata
+	if req.Metadata != nil {
+		for k, v := range req.Metadata {
+			doc.Metadata[k] = v
+		}
+	}
+	doc.Metadata["render_javascript"] = req.Options.RenderJavaScript
+	doc.Metadata["render_timeout"] = req.Options.RenderTimeout
+	doc.Metadata["wait_selector"] = req.Options.WaitSelector
+	doc.Metadata["render_fallback"] = req.Options.RenderFallback
+
+	if err := s.db.WithContext(ctx).Create(&doc).Error; err != nil {
+		return nil, fmt.Errorf("failed to create document record: %w", err)
+	}
+
+	// Set default options
+	chunkSize := req.Options.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = 1000
+	}
+	chunkOverlap := req.Options.ChunkOverlap
+	if chunkOverlap < 0 {
+		chunkOverlap = 100
+	}
+
+	// Enqueue processing task
+	payload := queue.DocumentProcessPayload{
+		TaskPayload: queue.TaskPayload{
+			DocumentID:  doc.ID,
+			NamespaceID: req.NamespaceID,
+			UserID:      req.UserID,
+		},
+		SourceURL:      req.URL,
+		SourceMetadata: req.Metadata,
+		Options: queue.ProcessingOptions{
+			ChunkSize:        chunkSize,
+			ChunkOverlap:     chunkOverlap,
+			ParserType:       req.Options.ParserType,
+			SkipEmbedding:    req.Options.SkipEmbedding,
+			ForceReprocess:   true,
+			RenderJavaScript: req.Options.RenderJavaScript,
+			RenderTimeout:    req.Options.RenderTimeout,
+			WaitSelector:     req.Options.WaitSelector,
+			RenderFallback:   req.Options.RenderFallback,
+		},
+	}
+
+	taskInfo, err := s.queue.EnqueueDocumentProcess(ctx, payload, queue.DefaultTaskOptions()...)
+	if err != nil {
+		// Update document status to failed
+		s.db.WithContext(ctx).Model(&doc).Update("status", models.DocumentStatusFailed)
+		return nil, fmt.Errorf("failed to enqueue processing task: %w", err)
+	}
+
+	logger.WithFields(logrus.Fields{
+		"document_id": doc.ID,
+		"task_id":     taskInfo.ID,
+	}).Info("Document import successful, processing queued")
+
+	return &UploadResult{
+		DocumentID: doc.ID,
+		Status:     models.DocumentStatusPending,
+		TaskID:     taskInfo.ID,
+		Message:    "Document import queued for processing",
 	}, nil
 }
 
@@ -265,11 +394,15 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest) (*UploadResult,
 		FileName:    req.FileHeader.Filename,
 		ContentType: req.FileHeader.Header.Get("Content-Type"),
 		Options: queue.ProcessingOptions{
-			ChunkSize:      req.Options.ChunkSize,
-			ChunkOverlap:   req.Options.ChunkOverlap,
-			ParserType:     req.Options.ParserType,
-			SkipEmbedding:  req.Options.SkipEmbedding,
-			ForceReprocess: true,
+			ChunkSize:        req.Options.ChunkSize,
+			ChunkOverlap:     req.Options.ChunkOverlap,
+			ParserType:       req.Options.ParserType,
+			SkipEmbedding:    req.Options.SkipEmbedding,
+			ForceReprocess:   true,
+			RenderJavaScript: req.Options.RenderJavaScript,
+			RenderTimeout:    req.Options.RenderTimeout,
+			WaitSelector:     req.Options.WaitSelector,
+			RenderFallback:   req.Options.RenderFallback,
 		},
 	}
 
@@ -341,6 +474,99 @@ func (s *Service) Delete(ctx context.Context, documentID, namespaceID, userID uu
 	return nil
 }
 
+// Retry re-enqueues a failed document for processing
+func (s *Service) Retry(ctx context.Context, documentID, namespaceID, userID uuid.UUID) (*UploadResult, error) {
+	s.logger.WithFields(logrus.Fields{
+		"document_id":  documentID,
+		"namespace_id": namespaceID,
+		"user_id":      userID,
+	}).Info("Retrying document processing")
+
+	// Check permission
+	if err := s.checkNamespacePermission(ctx, namespaceID, userID, "write"); err != nil {
+		return nil, err
+	}
+
+	// Get document
+	var doc models.Document
+	if err := s.db.WithContext(ctx).Where("id = ? AND namespace_id = ?", documentID, namespaceID).First(&doc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("document not found")
+		}
+		return nil, err
+	}
+
+	// Only retry failed documents
+	if doc.Status != models.DocumentStatusFailed {
+		return nil, errors.New("only failed documents can be retried")
+	}
+
+	// Reset status and error message
+	doc.Status = models.DocumentStatusPending
+	doc.ErrorMessage = ""
+	doc.UpdatedAt = time.Now()
+
+	if err := s.db.WithContext(ctx).Save(&doc).Error; err != nil {
+		return nil, fmt.Errorf("failed to update document status: %w", err)
+	}
+
+	// Prepare options from metadata
+	chunkSize := 1000
+	if val, ok := doc.Metadata["chunk_size"].(float64); ok {
+		chunkSize = int(val)
+	}
+	chunkOverlap := 100
+	if val, ok := doc.Metadata["chunk_overlap"].(float64); ok {
+		chunkOverlap = int(val)
+	}
+	parserType := "auto"
+	if val, ok := doc.Metadata["parser_type"].(string); ok {
+		parserType = val
+	}
+
+	// Enqueue processing task
+	payload := queue.DocumentProcessPayload{
+		TaskPayload: queue.TaskPayload{
+			DocumentID:  doc.ID,
+			NamespaceID: namespaceID,
+			UserID:      userID,
+		},
+		Options: queue.ProcessingOptions{
+			ChunkSize:      chunkSize,
+			ChunkOverlap:   chunkOverlap,
+			ParserType:     parserType,
+			ForceReprocess: true,
+		},
+	}
+
+	// Handle different source types
+	if strings.HasPrefix(doc.SourceURI, "file://") {
+		payload.FilePath = strings.TrimPrefix(doc.SourceURI, "file://")
+		if fn, ok := doc.Metadata["original_filename"].(string); ok {
+			payload.FileName = fn
+		}
+		if ct, ok := doc.Metadata["content_type"].(string); ok {
+			payload.ContentType = ct
+		}
+	} else {
+		payload.SourceURL = doc.SourceURI
+		payload.SourceMetadata = doc.Metadata
+	}
+
+	taskInfo, err := s.queue.EnqueueDocumentProcess(ctx, payload, queue.DefaultTaskOptions()...)
+	if err != nil {
+		s.db.WithContext(ctx).Model(&doc).Update("status", models.DocumentStatusFailed)
+		return nil, fmt.Errorf("failed to enqueue retry task: %w", err)
+	}
+
+	return &UploadResult{
+		DocumentID: doc.ID,
+		Status:     models.DocumentStatusPending,
+		TaskID:     taskInfo.ID,
+		Message:    "Document processing retried",
+	}, nil
+}
+
 // Get retrieves a document by ID
 func (s *Service) Get(ctx context.Context, documentID, namespaceID uuid.UUID) (*models.Document, error) {
 	var doc models.Document
@@ -359,7 +585,7 @@ func (s *Service) List(ctx context.Context, namespaceID uuid.UUID, status string
 	var total int64
 
 	query := s.db.WithContext(ctx).Model(&models.Document{}).Where("namespace_id = ?", namespaceID)
-	
+
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -426,7 +652,44 @@ func calculateHash(content []byte) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// GetFileContent retrieves file content for a document
+// UpdateTitle updates the document title in metadata
+func (s *Service) UpdateTitle(ctx context.Context, documentID, namespaceID, userID uuid.UUID, title string) error {
+	logger := s.logger.WithFields(logrus.Fields{
+		"document_id":  documentID,
+		"namespace_id": namespaceID,
+		"user_id":      userID,
+	})
+
+	logger.Info("Updating document title")
+
+	// Check permission
+	if err := s.checkNamespacePermission(ctx, namespaceID, userID, "write"); err != nil {
+		return err
+	}
+
+	// Get document
+	var doc models.Document
+	if err := s.db.WithContext(ctx).Where("id = ? AND namespace_id = ?", documentID, namespaceID).First(&doc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("document not found")
+		}
+		return err
+	}
+
+	// Update title in metadata
+	if doc.Metadata == nil {
+		doc.Metadata = make(map[string]any)
+	}
+	doc.Metadata["title"] = title
+	doc.UpdatedAt = time.Now()
+
+	if err := s.db.WithContext(ctx).Save(&doc).Error; err != nil {
+		return fmt.Errorf("failed to update document title: %w", err)
+	}
+
+	logger.Info("Document title updated successfully")
+	return nil
+}
 func (s *Service) GetFileContent(ctx context.Context, documentID, namespaceID uuid.UUID) (io.ReadCloser, string, error) {
 	doc, err := s.Get(ctx, documentID, namespaceID)
 	if err != nil {

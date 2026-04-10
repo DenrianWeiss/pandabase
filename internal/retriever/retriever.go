@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -35,7 +36,7 @@ type SearchRequest struct {
 	Mode           SearchMode             `json:"mode,omitempty"`
 	HybridWeight   float64                `json:"hybrid_weight,omitempty"` // 0.0-1.0, weight for vector search (1-weight for fulltext)
 	Filters        map[string]interface{} `json:"filters,omitempty"`
-	IncludeContent bool                   `json:"include_content,omitempty"` // Whether to include full chunk content in response
+	IncludeContent *bool                  `json:"include_content,omitempty"` // Whether to include full chunk content in response
 }
 
 // Validate validates the search request
@@ -55,7 +56,22 @@ func (r *SearchRequest) Validate() error {
 	if r.HybridWeight < 0 || r.HybridWeight > 1 {
 		return fmt.Errorf("hybrid_weight must be between 0 and 1")
 	}
+	if r.IncludeContent == nil {
+		r.IncludeContent = boolPtr(true)
+	}
 	return nil
+}
+
+// IncludeContentEnabled returns whether chunk content should be returned.
+func (r SearchRequest) IncludeContentEnabled() bool {
+	if r.IncludeContent == nil {
+		return true
+	}
+	return *r.IncludeContent
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 // DocumentInfo represents document information in search results
@@ -97,6 +113,34 @@ type SearchResult struct {
 
 	// Rank information
 	Rank int `json:"rank"`
+
+	// Context around the matched chunk
+	Context ContextInfo `json:"context,omitempty"`
+}
+
+// ContextInfo contains neighboring chunk context used by API/UI display.
+type ContextInfo struct {
+	Text            string `json:"text,omitempty"`
+	StartChunkIndex int    `json:"start_chunk_index,omitempty"`
+	EndChunkIndex   int    `json:"end_chunk_index,omitempty"`
+	Truncated       bool   `json:"truncated,omitempty"`
+}
+
+type searchRow struct {
+	ChunkID         uuid.UUID `gorm:"column:chunk_id"`
+	DocumentID      uuid.UUID `gorm:"column:document_id"`
+	NamespaceID     uuid.UUID `gorm:"column:namespace_id"`
+	ChunkIndex      int       `gorm:"column:chunk_index"`
+	ChunkContent    string    `gorm:"column:chunk_content"`
+	ChunkLocation   string    `gorm:"column:chunk_location"`
+	ChunkTokenCount int       `gorm:"column:chunk_token_count"`
+	ChunkMetadata   string    `gorm:"column:chunk_metadata"`
+	DocSourceType   string    `gorm:"column:document_source_type"`
+	DocSourceURI    string    `gorm:"column:document_source_uri"`
+	DocMetadata     string    `gorm:"column:document_metadata"`
+	VectorScore     float64   `gorm:"column:vector_score"`
+	VectorDistance  float64   `gorm:"column:vector_distance"`
+	FullTextScore   float64   `gorm:"column:fulltext_score"`
 }
 
 // SearchResponse represents the response from a search
@@ -167,13 +211,15 @@ func (r *Retriever) vectorSearch(ctx context.Context, req SearchRequest) (*Searc
 	query := r.buildVectorSearchQuery(req, queryVector)
 
 	// Execute search
-	var results []SearchResult
-	if err := query.Scan(&results).Error; err != nil {
+	rows, err := r.scanSearchRows(query)
+	if err != nil {
 		return nil, fmt.Errorf("vector search failed: %w", err)
 	}
+	results := mapSearchRows(rows)
 
 	// Post-process results
-	r.postProcessResults(&results, req.MinScore, req.IncludeContent)
+	r.postProcessResults(&results, req.MinScore, req.IncludeContentEnabled())
+	r.attachContexts(ctx, &results)
 
 	return &SearchResponse{
 		Results:    results,
@@ -195,12 +241,12 @@ func (r *Retriever) buildVectorSearchQuery(req SearchRequest, queryVector []floa
 			c.document_id as document_id,
 			d.namespace_id as namespace_id,
 			c.chunk_index as chunk_index,
-			c.content as content,
-			c.location::text as location,
-			c.token_count as token_count,
+			c.content as chunk_content,
+			c.location::text as chunk_location,
+			c.token_count as chunk_token_count,
 			c.metadata::text as chunk_metadata,
-			d.source_type as source_type,
-			d.source_uri as source_uri,
+			d.source_type as document_source_type,
+			d.source_uri as document_source_uri,
 			d.metadata::text as document_metadata,
 			1 - (e.embedding <=> ?::%[1]s) as vector_score,
 			e.embedding <=> ?::%[1]s as vector_distance
@@ -228,13 +274,15 @@ func (r *Retriever) fullTextSearch(ctx context.Context, req SearchRequest) (*Sea
 	query := r.buildFullTextSearchQuery(req)
 
 	// Execute search
-	var results []SearchResult
-	if err := query.Scan(&results).Error; err != nil {
+	rows, err := r.scanSearchRows(query)
+	if err != nil {
 		return nil, fmt.Errorf("full-text search failed: %w", err)
 	}
+	results := mapSearchRows(rows)
 
 	// Post-process results
-	r.postProcessResults(&results, req.MinScore, req.IncludeContent)
+	r.postProcessResults(&results, req.MinScore, req.IncludeContentEnabled())
+	r.attachContexts(ctx, &results)
 
 	return &SearchResponse{
 		Results:    results,
@@ -251,12 +299,12 @@ func (r *Retriever) buildFullTextSearchQuery(req SearchRequest) *gorm.DB {
 			c.document_id as document_id,
 			d.namespace_id as namespace_id,
 			c.chunk_index as chunk_index,
-			c.content as content,
-			c.location::text as location,
-			c.token_count as token_count,
+			c.content as chunk_content,
+			c.location::text as chunk_location,
+			c.token_count as chunk_token_count,
 			c.metadata::text as chunk_metadata,
-			d.source_type as source_type,
-			d.source_uri as source_uri,
+			d.source_type as document_source_type,
+			d.source_uri as document_source_uri,
 			d.metadata::text as document_metadata,
 			ts_rank(to_tsvector('%[1]s', c.content), plainto_tsquery('%[1]s', ?)) as fulltext_score
 		`, r.ftsDict)
@@ -310,7 +358,8 @@ func (r *Retriever) hybridSearch(ctx context.Context, req SearchRequest) (*Searc
 	mergedResults := r.mergeAndRerank(vectorResults, fullTextResults, req.HybridWeight, req.TopK)
 
 	// Post-process results
-	r.postProcessResults(&mergedResults, req.MinScore, req.IncludeContent)
+	r.postProcessResults(&mergedResults, req.MinScore, req.IncludeContentEnabled())
+	r.attachContexts(ctx, &mergedResults)
 
 	return &SearchResponse{
 		Results:    mergedResults,
@@ -324,10 +373,11 @@ func (r *Retriever) hybridSearch(ctx context.Context, req SearchRequest) (*Searc
 func (r *Retriever) fetchVectorResults(req SearchRequest, queryVector []float32) (map[uuid.UUID]SearchResult, error) {
 	query := r.buildVectorSearchQuery(req, queryVector)
 
-	var results []SearchResult
-	if err := query.Scan(&results).Error; err != nil {
+	rows, err := r.scanSearchRows(query)
+	if err != nil {
 		return nil, err
 	}
+	results := mapSearchRows(rows)
 
 	resultMap := make(map[uuid.UUID]SearchResult)
 	for _, result := range results {
@@ -343,10 +393,11 @@ func (r *Retriever) fetchVectorResults(req SearchRequest, queryVector []float32)
 func (r *Retriever) fetchFullTextResults(req SearchRequest) (map[uuid.UUID]SearchResult, error) {
 	query := r.buildFullTextSearchQuery(req)
 
-	var results []SearchResult
-	if err := query.Scan(&results).Error; err != nil {
+	rows, err := r.scanSearchRows(query)
+	if err != nil {
 		return nil, err
 	}
+	results := mapSearchRows(rows)
 
 	resultMap := make(map[uuid.UUID]SearchResult)
 	for _, result := range results {
@@ -490,6 +541,15 @@ func (r *Retriever) postProcessResults(results *[]SearchResult, minScore float64
 	// Assign ranks and handle content
 	for i := range *results {
 		(*results)[i].Rank = i + 1
+
+		// Ensure IDs are properly populated (GORM Scan sometimes misses nested embedded fields)
+		if (*results)[i].Chunk.ID == uuid.Nil && (*results)[i].ChunkID != uuid.Nil {
+			(*results)[i].Chunk.ID = (*results)[i].ChunkID
+		}
+		if (*results)[i].Document.ID == uuid.Nil && (*results)[i].DocumentID != uuid.Nil {
+			(*results)[i].Document.ID = (*results)[i].DocumentID
+		}
+
 		if !includeContent {
 			(*results)[i].Chunk.Content = "" // Remove content if not requested
 		}
@@ -532,16 +592,178 @@ func normalizeTsQuery(query string) string {
 
 // sortResultsByScore sorts results by final score in descending order
 func sortResultsByScore(results []SearchResult) {
-	// Simple bubble sort for small result sets
-	// For production, consider using sort.Slice
-	n := len(results)
-	for i := 0; i < n; i++ {
-		for j := 0; j < n-i-1; j++ {
-			if results[j].FinalScore < results[j+1].FinalScore {
-				results[j], results[j+1] = results[j+1], results[j]
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].FinalScore > results[j].FinalScore
+	})
+}
+
+func (r *Retriever) scanSearchRows(query *gorm.DB) ([]searchRow, error) {
+	var rows []searchRow
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func mapSearchRows(rows []searchRow) []SearchResult {
+	results := make([]SearchResult, 0, len(rows))
+	for _, row := range rows {
+		var location models.LocationInfo
+		if row.ChunkLocation != "" {
+			_ = json.Unmarshal([]byte(row.ChunkLocation), &location)
+		}
+
+		var chunkMeta map[string]any
+		if row.ChunkMetadata != "" {
+			_ = json.Unmarshal([]byte(row.ChunkMetadata), &chunkMeta)
+		}
+
+		var docMeta map[string]any
+		if row.DocMetadata != "" {
+			_ = json.Unmarshal([]byte(row.DocMetadata), &docMeta)
+		}
+
+		results = append(results, SearchResult{
+			ChunkID:     row.ChunkID,
+			DocumentID:  row.DocumentID,
+			NamespaceID: row.NamespaceID,
+			Chunk: ChunkInfo{
+				ID:         row.ChunkID,
+				ChunkIndex: row.ChunkIndex,
+				Content:    row.ChunkContent,
+				Location:   location,
+				TokenCount: row.ChunkTokenCount,
+				Metadata:   chunkMeta,
+			},
+			Document: DocumentInfo{
+				ID:         row.DocumentID,
+				SourceType: row.DocSourceType,
+				SourceURI:  row.DocSourceURI,
+				Metadata:   docMeta,
+			},
+			VectorScore:    row.VectorScore,
+			VectorDistance: row.VectorDistance,
+			FullTextScore:  row.FullTextScore,
+		})
+	}
+	return results
+}
+
+func (r *Retriever) attachContexts(ctx context.Context, results *[]SearchResult) {
+	if len(*results) == 0 {
+		return
+	}
+
+	const neighborWindow = 2
+	const maxContextChars = 500
+
+	for i := range *results {
+		res := &(*results)[i]
+		start := res.Chunk.ChunkIndex - neighborWindow
+		if start < 0 {
+			start = 0
+		}
+		end := res.Chunk.ChunkIndex + neighborWindow
+
+		var chunks []models.Chunk
+		err := r.db.WithContext(ctx).
+			Where("document_id = ? AND chunk_index >= ? AND chunk_index <= ?", res.DocumentID, start, end).
+			Order("chunk_index ASC").
+			Find(&chunks).Error
+		if err != nil || len(chunks) == 0 {
+			continue
+		}
+
+		parts := make([]string, 0, len(chunks))
+		for _, c := range chunks {
+			if strings.TrimSpace(c.Content) == "" {
+				continue
 			}
+			parts = append(parts, strings.TrimSpace(c.Content))
+		}
+		if len(parts) == 0 {
+			continue
+		}
+
+		joined := strings.Join(parts, "\n")
+		text, truncated := clampAroundHit(joined, res.Chunk.Content, maxContextChars)
+
+		res.Context = ContextInfo{
+			Text:            text,
+			StartChunkIndex: chunks[0].ChunkIndex,
+			EndChunkIndex:   chunks[len(chunks)-1].ChunkIndex,
+			Truncated:       truncated,
 		}
 	}
+}
+
+func clampAroundHit(contextText string, hitContent string, maxChars int) (string, bool) {
+	runes := []rune(contextText)
+	if maxChars <= 0 || len(runes) <= maxChars {
+		return contextText, false
+	}
+
+	center := len(runes) / 2
+	hitRunes := []rune(strings.TrimSpace(hitContent))
+	if hit := strings.Index(contextText, strings.TrimSpace(hitContent)); hit >= 0 {
+		center = len([]rune(contextText[:hit])) + len(hitRunes)/2
+	}
+
+	half := maxChars / 2
+	start := center - half
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxChars
+	if end > len(runes) {
+		end = len(runes)
+		start = end - maxChars
+		if start < 0 {
+			start = 0
+		}
+	}
+
+	start = adjustToSentenceStart(runes, start)
+	end = adjustToSentenceEnd(runes, end)
+
+	if end <= start {
+		return string(runes[:maxChars]), true
+	}
+	out := strings.TrimSpace(string(runes[start:end]))
+	outRunes := []rune(out)
+	if len(outRunes) > maxChars {
+		out = string(outRunes[:maxChars])
+	}
+	return out, true
+}
+
+func adjustToSentenceStart(runes []rune, pos int) int {
+	if pos <= 0 || pos >= len(runes) {
+		return pos
+	}
+	separators := "。！？.!?\n"
+	for i := pos; i > 0; i-- {
+		if strings.ContainsRune(separators, runes[i]) {
+			if i+1 < len(runes) {
+				return i + 1
+			}
+			return i
+		}
+	}
+	return pos
+}
+
+func adjustToSentenceEnd(runes []rune, pos int) int {
+	if pos <= 0 || pos >= len(runes) {
+		return pos
+	}
+	separators := "。！？.!?\n"
+	for i := pos; i < len(runes); i++ {
+		if strings.ContainsRune(separators, runes[i]) {
+			return i + 1
+		}
+	}
+	return pos
 }
 
 // GetChunkByID retrieves a specific chunk by ID with its full content
@@ -549,19 +771,19 @@ func (r *Retriever) GetChunkByID(ctx context.Context, chunkID uuid.UUID) (*Searc
 	var result SearchResult
 	// We need to fetch into a flat structure first due to gorm JSON limitations
 	var flat struct {
-		ChunkID         uuid.UUID
-		DocumentID      uuid.UUID
-		NamespaceID     uuid.UUID
-		ChunkIndex      int
-		Content         string
-		Location        string `gorm:"column:location"`
-		TokenCount      int
-		ChunkMetadata   string `gorm:"column:chunk_metadata"`
-		SourceType      string
-		SourceURI       string
+		ChunkID          uuid.UUID
+		DocumentID       uuid.UUID
+		NamespaceID      uuid.UUID
+		ChunkIndex       int
+		Content          string
+		Location         string `gorm:"column:location"`
+		TokenCount       int
+		ChunkMetadata    string `gorm:"column:chunk_metadata"`
+		SourceType       string
+		SourceURI        string
 		DocumentMetadata string `gorm:"column:document_metadata"`
 	}
-	
+
 	err := r.db.Table("chunks AS c").
 		Select(`
 			c.id as chunk_id,
@@ -587,23 +809,23 @@ func (r *Retriever) GetChunkByID(ctx context.Context, chunkID uuid.UUID) (*Searc
 	if flat.ChunkID == uuid.Nil {
 		return nil, fmt.Errorf("chunk not found: %s", chunkID)
 	}
-	
+
 	// Parse JSON
 	var location models.LocationInfo
 	if flat.Location != "" {
 		json.Unmarshal([]byte(flat.Location), &location)
 	}
-	
+
 	var chunkMetadata map[string]any
 	if flat.ChunkMetadata != "" {
 		json.Unmarshal([]byte(flat.ChunkMetadata), &chunkMetadata)
 	}
-	
+
 	var documentMetadata map[string]any
 	if flat.DocumentMetadata != "" {
 		json.Unmarshal([]byte(flat.DocumentMetadata), &documentMetadata)
 	}
-	
+
 	// Map flat struct to nested SearchResult
 	result = SearchResult{
 		ChunkID:     flat.ChunkID,
@@ -632,21 +854,21 @@ func (r *Retriever) GetChunkByID(ctx context.Context, chunkID uuid.UUID) (*Searc
 func (r *Retriever) GetDocumentChunks(ctx context.Context, documentID uuid.UUID) ([]SearchResult, error) {
 	// We need to fetch into a flat structure first due to gorm JSON limitations
 	type flatChunk struct {
-		ChunkID         uuid.UUID
-		DocumentID      uuid.UUID
-		NamespaceID     uuid.UUID
-		ChunkIndex      int
-		Content         string
-		Location        string `gorm:"column:location"`
-		TokenCount      int
-		ChunkMetadata   string `gorm:"column:chunk_metadata"`
-		SourceType      string
-		SourceURI       string
+		ChunkID          uuid.UUID
+		DocumentID       uuid.UUID
+		NamespaceID      uuid.UUID
+		ChunkIndex       int
+		Content          string
+		Location         string `gorm:"column:location"`
+		TokenCount       int
+		ChunkMetadata    string `gorm:"column:chunk_metadata"`
+		SourceType       string
+		SourceURI        string
 		DocumentMetadata string `gorm:"column:document_metadata"`
 	}
-	
+
 	var flatResults []flatChunk
-	
+
 	err := r.db.Table("chunks AS c").
 		Select(`
 			c.id as chunk_id,
@@ -677,17 +899,17 @@ func (r *Retriever) GetDocumentChunks(ctx context.Context, documentID uuid.UUID)
 		if flat.Location != "" {
 			json.Unmarshal([]byte(flat.Location), &location)
 		}
-		
+
 		var chunkMetadata map[string]any
 		if flat.ChunkMetadata != "" {
 			json.Unmarshal([]byte(flat.ChunkMetadata), &chunkMetadata)
 		}
-		
+
 		var documentMetadata map[string]any
 		if flat.DocumentMetadata != "" {
 			json.Unmarshal([]byte(flat.DocumentMetadata), &documentMetadata)
 		}
-		
+
 		results[i] = SearchResult{
 			ChunkID:     flat.ChunkID,
 			DocumentID:  flat.DocumentID,

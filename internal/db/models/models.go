@@ -48,6 +48,7 @@ type Document struct {
 	SourceURI    string         `gorm:"type:text;not null" json:"source_uri"`
 	ContentHash  string         `gorm:"type:varchar(64);not null;index" json:"content_hash"`
 	Status       DocumentStatus `gorm:"type:varchar(50);not null;default:'pending'" json:"status"`
+	ErrorMessage string         `gorm:"type:text" json:"error_message,omitempty"`
 	Metadata     map[string]any `gorm:"type:jsonb;serializer:json" json:"metadata"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`

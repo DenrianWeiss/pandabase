@@ -83,6 +83,7 @@
                 <ul class="nav-links">
                     <li class="active" data-view="docs">Documents</li>
                     <li data-view="search">Vector Search</li>
+                    <li data-view="security">Security</li>
                     <li id="nav-users" data-view="users" style="display:none">Users</li>
                 </ul>
                 <div class="user-profile">
@@ -161,6 +162,55 @@
                     <!-- Populated by JS -->
                 </tbody>
             </table>
+        </div>
+    </template>
+
+    <!-- Security View -->
+    <template id="tpl-view-security">
+        <div class="users-header">
+            <h2>Security</h2>
+        </div>
+
+        <div class="glass-panel" style="padding:1rem; margin-bottom:1rem;">
+            <h3 style="margin-bottom:0.5rem;">Personal Access Tokens</h3>
+            <p class="help-text" style="margin-bottom:0.75rem;">Create persistent tokens for API clients. Plain token is shown only once.</p>
+            <div style="display:flex; gap:0.5rem; margin-bottom:0.75rem;">
+                <input type="text" id="token-name" placeholder="Token name (e.g. ci-bot)">
+                <input type="number" id="token-expiry-days" placeholder="Expiry days (optional)">
+                <button id="btn-create-token" class="btn-primary">Create Token</button>
+            </div>
+            <div class="table-container">
+                <table class="doc-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Prefix</th>
+                            <th>Created</th>
+                            <th>Last Used</th>
+                            <th>Expires</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="token-list"></tbody>
+                </table>
+            </div>
+            <div id="token-create-result" class="help-text" style="margin-top:0.5rem;"></div>
+        </div>
+
+        <div class="glass-panel" style="padding:1rem;">
+            <h3 style="margin-bottom:0.5rem;">Reset Password</h3>
+            <form id="password-reset-form" style="max-width:520px;">
+                <div class="form-group">
+                    <label>Current Password</label>
+                    <input type="password" id="current-password" required>
+                </div>
+                <div class="form-group">
+                    <label>New Password</label>
+                    <input type="password" id="new-password" minlength="8" required>
+                </div>
+                <button type="submit" class="btn-primary">Update Password</button>
+                <div id="password-reset-msg" class="help-text" style="margin-top:0.5rem;"></div>
+            </form>
         </div>
     </template>
 

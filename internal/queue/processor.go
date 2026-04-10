@@ -3,10 +3,12 @@ package queue
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,10 +27,13 @@ import (
 
 // Processor handles task processing
 type Processor struct {
-	db       *gorm.DB
-	storage  storage.Storage
-	embedder plugin.Embedder
-	logger   *logrus.Logger
+	db              *gorm.DB
+	storage         storage.Storage
+	embedder        plugin.Embedder
+	logger          *logrus.Logger
+	httpClient      *http.Client
+	staticFetcher   URLFetcher
+	renderedFetcher URLFetcher
 }
 
 // NewProcessor creates a new task processor
@@ -38,6 +43,17 @@ func NewProcessor(db *gorm.DB, storage storage.Storage, embedder plugin.Embedder
 		storage:  storage,
 		embedder: embedder,
 		logger:   logger,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		},
+		staticFetcher: NewStaticURLFetcher((&http.Client{
+			Timeout:   30 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		})),
+		renderedFetcher: NewChromedpURLFetcher(),
 	}
 }
 
@@ -69,21 +85,73 @@ func (p *Processor) handleDocumentProcess(ctx context.Context, task *asynq.Task)
 		return err
 	}
 
-	// Get file from storage
-	file, err := p.storage.Get(ctx, payload.FilePath)
-	if err != nil {
-		p.updateDocumentStatus(ctx, payload.DocumentID, models.DocumentStatusFailed, err.Error())
-		logger.WithError(err).Error("Failed to get file from storage")
-		return err
-	}
-	defer file.Close()
+	// Get content
+	var content []byte
+	var err error
+	var finalContentType = payload.ContentType
+	var finalFileName = payload.FileName
+	var storagePath string
 
-	// Read content
-	content, err := io.ReadAll(file)
-	if err != nil {
-		p.updateDocumentStatus(ctx, payload.DocumentID, models.DocumentStatusFailed, err.Error())
-		logger.WithError(err).Error("Failed to read file content")
-		return err
+	if payload.SourceURL != "" {
+		logger.WithField("url", payload.SourceURL).Info("Fetching content from URL")
+		if payload.Options.ParserType == "notion" {
+			// Notion parser handles fetching via API using the URL in metadata
+			content = []byte{}
+			finalContentType = "application/x-notion"
+			if finalFileName == "" {
+				finalFileName = "notion-page"
+			}
+		} else {
+			content, err = p.fetchURLContent(ctx, payload.SourceURL, payload.Options)
+			if err != nil {
+				p.updateDocumentStatus(ctx, payload.DocumentID, models.DocumentStatusFailed, "fetch failed: "+err.Error())
+				return err
+			}
+			if payload.Options.RenderJavaScript {
+				finalContentType = "text/plain"
+			} else {
+				finalContentType = "text/html"
+			}
+			if finalFileName == "" {
+				if payload.Options.RenderJavaScript {
+					finalFileName = "webpage_rendered.txt"
+				} else {
+					finalFileName = "webpage.html"
+				}
+			}
+		}
+
+		// Save fetched content to storage for download support
+		storagePath, err = p.storage.Save(ctx, finalFileName, strings.NewReader(string(content)))
+		if err != nil {
+			logger.WithError(err).Warn("Failed to save fetched content to storage")
+			// Continue processing even if storage save fails
+		} else {
+			// Update document's SourceURI to point to the stored file
+			if err := p.db.WithContext(ctx).Model(&models.Document{}).
+				Where("id = ?", payload.DocumentID).
+				Update("source_uri", fmt.Sprintf("file://%s", storagePath)).Error; err != nil {
+				logger.WithError(err).Warn("Failed to update document source_uri")
+			}
+			logger.WithField("path", storagePath).Info("Saved fetched content to storage")
+		}
+	} else {
+		// Get file from storage
+		file, err := p.storage.Get(ctx, payload.FilePath)
+		if err != nil {
+			p.updateDocumentStatus(ctx, payload.DocumentID, models.DocumentStatusFailed, err.Error())
+			logger.WithError(err).Error("Failed to get file from storage")
+			return err
+		}
+		defer file.Close()
+
+		// Read content
+		content, err = io.ReadAll(file)
+		if err != nil {
+			p.updateDocumentStatus(ctx, payload.DocumentID, models.DocumentStatusFailed, err.Error())
+			logger.WithError(err).Error("Failed to read file content")
+			return err
+		}
 	}
 
 	// Calculate content hash
@@ -102,20 +170,26 @@ func (p *Processor) handleDocumentProcess(ctx context.Context, task *asynq.Task)
 	}
 
 	// Select parser based on content type
-	contentType := payload.ContentType
+	contentType := finalContentType
 	if payload.Options.ParserType != "auto" && payload.Options.ParserType != "" {
-		contentType = payload.Options.ParserType
+		forceExtractedTextParser := payload.SourceURL != "" &&
+			payload.Options.ParserType == "web" &&
+			payload.Options.RenderJavaScript &&
+			strings.Contains(finalContentType, "text/plain")
+		if !forceExtractedTextParser {
+			contentType = payload.Options.ParserType
+		}
 	}
 
 	var docParser plugin.DocumentParser
-	ext := strings.ToLower(filepath.Ext(payload.FileName))
-	
+	ext := strings.ToLower(filepath.Ext(finalFileName))
+
 	switch {
 	case strings.Contains(contentType, "pdf") || ext == ".pdf":
 		docParser = parser.NewPDFParser()
 	case strings.Contains(contentType, "notion") || ext == ".notion":
 		docParser = parser.NewNotionParser()
-	case strings.Contains(contentType, "html") || ext == ".html" || ext == ".htm":
+	case strings.Contains(contentType, "html") || strings.Contains(contentType, "web") || ext == ".html" || ext == ".htm":
 		docParser = parser.NewWebParser()
 	case strings.Contains(contentType, "markdown") || ext == ".md" || ext == ".markdown":
 		docParser = parser.NewMarkdownParser()
@@ -128,19 +202,55 @@ func (p *Processor) handleDocumentProcess(ctx context.Context, task *asynq.Task)
 
 	// Parse document
 	parseOpts := plugin.ParseOptions{
-		Filename:    payload.FileName,
-		ContentType: payload.ContentType,
+		Filename:         finalFileName,
+		ContentType:      finalContentType,
+		RenderJavaScript: payload.Options.RenderJavaScript,
+		RenderTimeout:    payload.Options.RenderTimeout,
+		WaitSelector:     payload.Options.WaitSelector,
 		Metadata: map[string]any{
-			"file_name":    payload.FileName,
-			"content_type": payload.ContentType,
+			"file_name":         finalFileName,
+			"content_type":      finalContentType,
+			"render_javascript": payload.Options.RenderJavaScript,
+			"render_timeout":    payload.Options.RenderTimeout,
+			"wait_selector":     payload.Options.WaitSelector,
 		},
 	}
-	
+
+	// Add source URL and metadata if available
+	if payload.SourceURL != "" {
+		parseOpts.Metadata["source_url"] = payload.SourceURL
+		if payload.Options.ParserType == "notion" {
+			parseOpts.Metadata["notion_url"] = payload.SourceURL
+		}
+	}
+	if payload.SourceMetadata != nil {
+		for k, v := range payload.SourceMetadata {
+			parseOpts.Metadata[k] = v
+		}
+	}
+
 	doc, err := docParser.Parse(ctx, strings.NewReader(string(content)), parseOpts)
 	if err != nil {
 		p.updateDocumentStatus(ctx, payload.DocumentID, models.DocumentStatusFailed, err.Error())
 		logger.WithError(err).Error("Failed to parse document")
 		return err
+	}
+
+	// Handle title extraction/setting for web pages
+	if payload.SourceMetadata != nil {
+		autoExtractTitle, _ := payload.SourceMetadata["auto_extract_title"].(bool)
+		manualTitle, hasManualTitle := payload.SourceMetadata["title"].(string)
+
+		if hasManualTitle && manualTitle != "" {
+			// Use manually provided title
+			doc.Metadata["title"] = manualTitle
+		} else if autoExtractTitle {
+			// Auto-extract title from parsed document (already in doc.Metadata["title"] from web parser)
+			if extractedTitle, ok := doc.Metadata["title"].(string); !ok || extractedTitle == "" {
+				// Fallback to using the first line of content or filename
+				doc.Metadata["title"] = finalFileName
+			}
+		}
 	}
 
 	// Select chunker
@@ -195,8 +305,8 @@ func (p *Processor) handleDocumentProcess(ctx context.Context, task *asynq.Task)
 		}
 
 		metadataInfo := map[string]any{
-			"file_name":    payload.FileName,
-			"content_type": payload.ContentType,
+			"file_name":    finalFileName,
+			"content_type": finalContentType,
 		}
 
 		if matchedOldChunk != nil {
@@ -255,7 +365,7 @@ func (p *Processor) handleDocumentProcess(ctx context.Context, task *asynq.Task)
 		// Generate embeddings if not skipped
 		if !payload.Options.SkipEmbedding && p.embedder != nil {
 			logger.Info("Generating embeddings for new chunks")
-			
+
 			embeddings, err := p.embedder.Embed(ctx, chunkContentsToEmbed)
 			if err != nil {
 				p.updateDocumentStatus(ctx, payload.DocumentID, models.DocumentStatusFailed, err.Error())
@@ -269,7 +379,7 @@ func (p *Processor) handleDocumentProcess(ctx context.Context, task *asynq.Task)
 					ChunkID: chunk.ID,
 					Model:   p.embedder.Model(),
 				}
-				
+
 				if err := p.saveEmbedding(ctx, embedding, embeddings[i]); err != nil {
 					logger.WithError(err).Warn("Failed to save embedding for chunk")
 				}
@@ -279,14 +389,35 @@ func (p *Processor) handleDocumentProcess(ctx context.Context, task *asynq.Task)
 		}
 	}
 
-	// Update document status
+	// Update document status and metadata
+	updates := map[string]interface{}{
+		"status":       models.DocumentStatusCompleted,
+		"content_hash": hash,
+		"updated_at":   time.Now(),
+	}
+
+	// Update metadata with title if present
+	if title, ok := doc.Metadata["title"].(string); ok && title != "" {
+		// Get current document to update metadata
+		var currentDoc models.Document
+		if err := p.db.WithContext(ctx).First(&currentDoc, "id = ?", payload.DocumentID).Error; err == nil {
+			if currentDoc.Metadata == nil {
+				currentDoc.Metadata = make(map[string]any)
+			}
+			currentDoc.Metadata["title"] = title
+			// Merge other metadata from parsing
+			for k, v := range doc.Metadata {
+				if k != "title" {
+					currentDoc.Metadata[k] = v
+				}
+			}
+			updates["metadata"] = currentDoc.Metadata
+		}
+	}
+
 	if err := p.db.WithContext(ctx).Model(&models.Document{}).
 		Where("id = ?", payload.DocumentID).
-		Updates(map[string]interface{}{
-			"status":       models.DocumentStatusCompleted,
-			"content_hash": hash,
-			"updated_at":   time.Now(),
-		}).Error; err != nil {
+		Updates(updates).Error; err != nil {
 		logger.WithError(err).Error("Failed to update document status")
 		return err
 	}
@@ -347,6 +478,25 @@ func (p *Processor) handleDocumentDelete(ctx context.Context, task *asynq.Task) 
 	return nil
 }
 
+func (p *Processor) fetchURLContent(ctx context.Context, sourceURL string, options ProcessingOptions) ([]byte, error) {
+	fetchOpts := URLFetchOptions{
+		RenderTimeout: options.RenderTimeout,
+		WaitSelector:  options.WaitSelector,
+	}
+
+	if options.RenderJavaScript {
+		rendered, err := p.renderedFetcher.Fetch(ctx, sourceURL, fetchOpts)
+		if err == nil {
+			return rendered, nil
+		}
+		if !options.RenderFallback {
+			return nil, fmt.Errorf("render fetch failed: %w", err)
+		}
+		p.logger.WithError(err).Warn("Rendered fetch failed, fallback to static fetch")
+	}
+	return p.staticFetcher.Fetch(ctx, sourceURL, fetchOpts)
+}
+
 // handleDocumentUpdate handles document update
 func (p *Processor) handleDocumentUpdate(ctx context.Context, task *asynq.Task) error {
 	// Update is essentially reprocessing
@@ -375,10 +525,10 @@ func (p *Processor) saveEmbedding(ctx context.Context, embedding models.Embeddin
 		INSERT INTO embeddings (id, chunk_id, model, embedding, created_at)
 		VALUES (gen_random_uuid(), ?, ?, ?, NOW())
 	`
-	
+
 	// Convert float32 slice to PostgreSQL vector format
 	vectorStr := vectorToPostgresString(vector)
-	
+
 	return p.db.WithContext(ctx).Exec(query, embedding.ChunkID, embedding.Model, vectorStr).Error
 }
 

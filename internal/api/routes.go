@@ -49,6 +49,10 @@ func SetupRoutes(
 		{
 			// User routes
 			protected.GET("/auth/me", authHandler.GetMe)
+			protected.POST("/auth/change-password", authHandler.ChangePassword)
+			protected.GET("/auth/tokens", authHandler.ListAPITokens)
+			protected.POST("/auth/tokens", authHandler.CreateAPIToken)
+			protected.DELETE("/auth/tokens/:id", authHandler.DeleteAPIToken)
 
 			// Admin only routes
 			admin := protected.Group("")
@@ -65,9 +69,12 @@ func SetupRoutes(
 			{
 				docs.GET("", docHandler.List)
 				docs.POST("", docHandler.Upload)
+				docs.POST("/import", docHandler.Import)
 				docs.GET("/:document_id", docHandler.Get)
 				docs.PUT("/:document_id", docHandler.Update)
+				docs.PATCH("/:document_id/title", docHandler.UpdateTitle)
 				docs.DELETE("/:document_id", docHandler.Delete)
+				docs.POST("/:document_id/retry", docHandler.Retry)
 				docs.GET("/:document_id/download", docHandler.Download)
 			}
 
@@ -93,7 +100,7 @@ func SetupRoutes(
 				namespaces.PUT("/:ns_id", nsHandler.Update)
 				namespaces.DELETE("/:ns_id", nsHandler.Delete)
 			}
-			
+
 			// Search routes
 			protected.POST("/search", retrieverHandler.Search)
 			protected.GET("/chunks/:id", retrieverHandler.GetChunkByID)
