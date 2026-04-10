@@ -5,6 +5,7 @@ import (
 
 	"pandabase/internal/api/handlers"
 	"pandabase/internal/auth"
+	"pandabase/internal/mcp"
 )
 
 // SetupRoutes configures all API routes
@@ -18,6 +19,7 @@ func SetupRoutes(
 	nsHandler *handlers.NamespaceHandler,
 	authService *auth.Service,
 	oauthService *auth.OAuthService,
+	mcpServer *mcp.Server,
 ) {
 	// Health check
 	router.GET("/health", func(c *gin.Context) {
@@ -105,6 +107,13 @@ func SetupRoutes(
 			protected.POST("/search", retrieverHandler.Search)
 			protected.GET("/chunks/:id", retrieverHandler.GetChunkByID)
 			protected.GET("/documents/:id/chunks", retrieverHandler.GetDocumentChunks)
+
+			// MCP routes
+			mcp := protected.Group("/mcp")
+			{
+				mcp.GET("/sse", mcpServer.HandleSSE)
+				mcp.POST("/messages", mcpServer.HandlePost)
+			}
 		}
 	}
 }

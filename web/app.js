@@ -504,7 +504,7 @@ async function performSearch() {
                 </div>
                 <div class="result-content">${content}</div>
                 ${contextText ? `<div class="result-context">${contextText}</div>` : ''}
-                ${hasMoreContext ? `<a class="result-context-link" href="/api/v1/documents/${result.document_id}/chunks" target="_blank" rel="noopener noreferrer">查看更多原文</a>` : ''}
+                ${hasMoreContext ? `<button class="result-context-link" onclick="openChunkViewer('${result.document_id}')">View More Context</button>` : ''}
             `;
             resultsContainer.appendChild(card);
         });
@@ -513,7 +513,12 @@ async function performSearch() {
     }
 }
 
-// Helpers
+// Function to open chunk viewer in a new tab
+function openChunkViewer(documentId) {
+    // Open a new tab with the viewer
+    const viewerUrl = `/viewer.html?docId=${encodeURIComponent(documentId)}&nsId=${encodeURIComponent(state.activeNamespaceId)}&token=${encodeURIComponent(state.token)}`;
+    window.open(viewerUrl, '_blank', 'noopener,noreferrer');
+}
 function logout() {
     state.token = null;
     state.user = null;

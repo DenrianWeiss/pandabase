@@ -48,6 +48,7 @@
 服务启动后：
 - HTTP API：`http://localhost:8080`
 - Web UI：`http://localhost:8080`（浏览器访问）
+- MCP 接口：支持 Model Context Protocol，详见 [MCP.md](MCP.md)
 - 健康检查：`GET /health`
 
 数据库表和索引会在首次启动时自动创建，无需手动迁移。

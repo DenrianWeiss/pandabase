@@ -77,3 +77,12 @@ auth:
       client_id: ""
       client_secret: ""
       redirect_url: "http://localhost:8080/api/v1/oauth/github/callback"
+
+# Web content post-processing configuration (optional)
+# Uses LLM to clean and extract useful content from web pages
+post_process:
+  enabled: false              # Enable post-processing for web content
+  api_url: "https://api.openai.com/v1"  # OpenAI-compatible API endpoint
+  api_key: ""                 # API key (if empty, feature is disabled)
+  model: "gpt-4o-mini"        # Model name for content cleaning
+  custom_prompt: ""           # Custom prompt (uses built-in prompt if empty)

@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-//go:embed index.html app.js styles.css
+//go:embed index.html app.js styles.css viewer.html
 var staticFiles embed.FS
 
 // RegisterFrontend mounts the embedded static files to the router
@@ -40,6 +40,16 @@ func RegisterFrontend(router *gin.Engine) {
 			return
 		}
 		c.Data(http.StatusOK, "text/css; charset=utf-8", content)
+	})
+
+	// Serve viewer.html
+	router.GET("/viewer.html", func(c *gin.Context) {
+		content, err := staticFiles.ReadFile("viewer.html")
+		if err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 	})
 
 	// Add a catch-all for SPA navigation if needed (optional since we just have one index file right now)

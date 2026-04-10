@@ -443,6 +443,28 @@ func documentCmd() *cobra.Command {
 	}
 	cmd.AddCommand(downloadCmd)
 
+	importCmd := &cobra.Command{
+		Use:   "import [namespace-id] [url]",
+		Short: "Import a document from URL",
+		Args:  cobra.ExactArgs(2),
+		RunE:  runImportURL,
+	}
+	importCmd.Flags().String("parser", "web", "Parser type (web, notion)")
+	importCmd.Flags().Int("chunk-size", 1000, "Chunk size")
+	importCmd.Flags().Int("chunk-overlap", 100, "Chunk overlap")
+	importCmd.Flags().Bool("render", false, "Render JavaScript")
+	cmd.AddCommand(importCmd)
+
+	batchImportCmd := &cobra.Command{
+		Use:   "batch-import [namespace-id] [file-path]",
+		Short: "Batch import documents from a list of URLs in a file",
+		Args:  cobra.ExactArgs(2),
+		RunE:  runBatchImport,
+	}
+	batchImportCmd.Flags().String("parser", "web", "Parser type (web, notion)")
+	batchImportCmd.Flags().Int("concurrency", 5, "Number of concurrent imports")
+	cmd.AddCommand(batchImportCmd)
+
 	return cmd
 }
 
@@ -647,6 +669,112 @@ func runDownloadDocument(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("✓ Downloaded %s (%d bytes)\n", outputPath, size)
+	return nil
+}
+
+func runImportURL(cmd *cobra.Command, args []string) error {
+	tokens, err := loadTokens()
+	if err != nil {
+		return fmt.Errorf("not authenticated. Run 'pandabase auth login'")
+	}
+
+	nsID := args[0]
+	url := args[1]
+
+	parser, _ := cmd.Flags().GetString("parser")
+	chunkSize, _ := cmd.Flags().GetInt("chunk-size")
+	chunkOverlap, _ := cmd.Flags().GetInt("chunk-overlap")
+	render, _ := cmd.Flags().GetBool("render")
+
+	return performImport(tokens.AccessToken, nsID, url, parser, chunkSize, chunkOverlap, render)
+}
+
+func performImport(token, nsID, url, parser string, chunkSize, chunkOverlap int, render bool) error {
+	payload := map[string]interface{}{
+		"url":               url,
+		"parser_type":       parser,
+		"chunk_size":        chunkSize,
+		"chunk_overlap":     chunkOverlap,
+		"render_javascript": render,
+	}
+
+	data, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", serverURL+"/api/v1/namespaces/"+nsID+"/documents/import", bytes.NewReader(data))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("import failed for %s: %s", url, string(body))
+	}
+
+	var result struct {
+		DocumentID string `json:"document_id"`
+		TaskID     string `json:"task_id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	fmt.Printf("✓ Queued import: %s (Doc ID: %s, Task ID: %s)\n", url, result.DocumentID, result.TaskID)
+	return nil
+}
+
+func runBatchImport(cmd *cobra.Command, args []string) error {
+	tokens, err := loadTokens()
+	if err != nil {
+		return fmt.Errorf("not authenticated. Run 'pandabase auth login'")
+	}
+
+	nsID := args[0]
+	filePath := args[1]
+	parser, _ := cmd.Flags().GetString("parser")
+	concurrency, _ := cmd.Flags().GetInt("concurrency")
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	urls := strings.Split(string(content), "\n")
+	var validURLs []string
+	for _, u := range urls {
+		u = strings.TrimSpace(u)
+		if u != "" && !strings.HasPrefix(u, "#") {
+			validURLs = append(validURLs, u)
+		}
+	}
+
+	if len(validURLs) == 0 {
+		fmt.Println("No valid URLs found in file")
+		return nil
+	}
+
+	fmt.Printf("Batch importing %d URLs with concurrency %d...\n", len(validURLs), concurrency)
+
+	sem := make(chan struct{}, concurrency)
+	for _, u := range validURLs {
+		sem <- struct{}{}
+		go func(url string) {
+			defer func() { <-sem }()
+			if err := performImport(tokens.AccessToken, nsID, url, parser, 1000, 100, false); err != nil {
+				fmt.Printf("✗ Failed import: %s - %v\n", url, err)
+			}
+		}(u)
+	}
+
+	// Wait for all workers
+	for i := 0; i < cap(sem); i++ {
+		sem <- struct{}{}
+	}
+
+	fmt.Println("✓ Batch import process finished")
 	return nil
 }
 

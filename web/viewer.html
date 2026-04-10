@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Viewer - Pandabase</title>
+    <link rel="stylesheet" href="/styles.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            background: var(--bg-primary);
+        }
+        .viewer-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .viewer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .viewer-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .chunk-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .chunk-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+        .chunk-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .chunk-index {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+        .chunk-content {
+            line-height: 1.6;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+        .error {
+            text-align: center;
+            padding: 3rem;
+            color: var(--danger);
+        }
+        .back-link {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="viewer-container">
+        <div class="viewer-header">
+            <h1 class="viewer-title" id="doc-title">Loading...</h1>
+            <a href="/" class="back-link">← Back to App</a>
+        </div>
+        <div id="content">
+            <div class="loading">Loading document chunks...</div>
+        </div>
+    </div>
+
+    <script>
+        // Get query parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const docId = urlParams.get('docId');
+        const nsId = urlParams.get('nsId');
+        const token = urlParams.get('token');
+
+        if (!docId || !nsId || !token) {
+            document.getElementById('content').innerHTML = '<div class="error">Missing required parameters</div>';
+        } else {
+            loadDocumentChunks();
+        }
+
+        async function loadDocumentChunks() {
+            try {
+                // First fetch document details
+                const docRes = await fetch(`/api/v1/namespaces/${nsId}/documents/${docId}`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!docRes.ok) {
+                    throw new Error('Failed to load document');
+                }
+
+                const doc = await docRes.json();
+                const docTitle = doc.metadata?.title || doc.metadata?.original_filename || 'Document';
+                document.getElementById('doc-title').textContent = docTitle;
+
+                // Then fetch chunks
+                const chunksRes = await fetch(`/api/v1/documents/${docId}/chunks`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!chunksRes.ok) {
+                    throw new Error('Failed to load chunks');
+                }
+
+                const response = await chunksRes.json();
+                const chunks = response.chunks || [];
+                renderChunks(chunks);
+            } catch (err) {
+                document.getElementById('content').innerHTML = `<div class="error">Error: ${err.message}</div>`;
+            }
+        }
+
+        function renderChunks(chunks) {
+            const contentDiv = document.getElementById('content');
+            
+            if (!chunks || chunks.length === 0) {
+                contentDiv.innerHTML = '<div class="loading">No chunks found</div>';
+                return;
+            }
+
+            // Sort chunks by index
+            const sortedChunks = chunks.sort((a, b) => (a.chunk_index || 0) - (b.chunk_index || 0));
+
+            const chunkList = document.createElement('div');
+            chunkList.className = 'chunk-list';
+
+            sortedChunks.forEach((chunk, index) => {
+                const chunkDiv = document.createElement('div');
+                chunkDiv.className = 'chunk-item';
+                chunkDiv.innerHTML = `
+                    <div class="chunk-header">
+                        <span class="chunk-index">Chunk ${chunk.chunk_index !== undefined ? chunk.chunk_index + 1 : index + 1}</span>
+                        <span style="font-size: 0.75rem; color: var(--text-secondary);">${chunk.token_count || 0} tokens</span>
+                    </div>
+                    <div class="chunk-content">${escapeHtml(chunk.content || '')}</div>
+                `;
+                chunkList.appendChild(chunkDiv);
+            });
+
+            contentDiv.innerHTML = '';
+            contentDiv.appendChild(chunkList);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

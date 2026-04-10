@@ -21,7 +21,9 @@ import (
 	"pandabase/internal/db"
 	"pandabase/internal/document"
 	"pandabase/internal/embedder"
+	"pandabase/internal/mcp"
 	"pandabase/internal/namespace"
+	"pandabase/internal/postprocess"
 	"pandabase/internal/queue"
 	"pandabase/internal/retriever"
 	"pandabase/internal/setup"
@@ -90,6 +92,18 @@ func main() {
 		}
 	}
 
+	// Initialize post-process service
+	postProcessService := postprocess.NewService(
+		cfg.PostProcess.APIURL,
+		cfg.PostProcess.APIKey,
+		cfg.PostProcess.Model,
+		cfg.PostProcess.CustomPrompt,
+		cfg.PostProcess.Enabled,
+	)
+	if postProcessService.IsEnabled() {
+		logger.Info("Post-processing service enabled for web content")
+	}
+
 	// Build Redis address
 	redisAddr := fmt.Sprintf("%s:%s", cfg.Redis.Host, cfg.Redis.Port)
 
@@ -116,6 +130,9 @@ func main() {
 	// Initialize retriever
 	ret := retriever.NewRetriever(database.DB, emb, cfg.Database.FTSDictionary, database.GetVectorType())
 
+	// Initialize MCP server
+	mcpServer := mcp.NewServer(ret, docService, logger)
+
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(authService, oauthService)
 	docHandler := handlers.NewDocumentHandler(docService)
@@ -131,7 +148,7 @@ func main() {
 	router.Use(loggingMiddleware(logger))
 
 	// Setup routes
-	api.SetupRoutes(router, authHandler, userHandler, docHandler, queueHandler, retrieverHandler, nsHandler, authService, oauthService)
+	api.SetupRoutes(router, authHandler, userHandler, docHandler, queueHandler, retrieverHandler, nsHandler, authService, oauthService, mcpServer)
 
 	// Setup embed frontend
 	web.RegisterFrontend(router)
@@ -145,7 +162,7 @@ func main() {
 
 	// Start worker in background
 	workerCtx, workerCancel := context.WithCancel(context.Background())
-	go runWorker(workerCtx, redisAddr, database.DB, store, emb, logger)
+	go runWorker(workerCtx, redisAddr, database.DB, store, emb, postProcessService, logger)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -204,8 +221,8 @@ func loggingMiddleware(logger *logrus.Logger) gin.HandlerFunc {
 }
 
 // runWorker runs the background task worker
-func runWorker(ctx context.Context, redisAddr string, db *gorm.DB, store storage.Storage, emb plugin.Embedder, logger *logrus.Logger) {
-	processor := queue.NewProcessor(db, store, emb, logger)
+func runWorker(ctx context.Context, redisAddr string, db *gorm.DB, store storage.Storage, emb plugin.Embedder, postProcessor *postprocess.Service, logger *logrus.Logger) {
+	processor := queue.NewProcessor(db, store, emb, postProcessor, logger)
 
 	mux := asynq.NewServeMux()
 	processor.RegisterHandlers(mux)

@@ -9,13 +9,14 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	Database  DatabaseConfig  `mapstructure:"database" yaml:"database" json:"database"`
-	Redis     RedisConfig     `mapstructure:"redis" yaml:"redis" json:"redis"`
-	Storage   StorageConfig   `mapstructure:"storage" yaml:"storage" json:"storage"`
-	Server    ServerConfig    `mapstructure:"server" yaml:"server" json:"server"`
-	Log       LogConfig       `mapstructure:"log" yaml:"log" json:"log"`
-	Embedding EmbeddingConfig `mapstructure:"embedding" yaml:"embedding" json:"embedding"`
-	Auth      AuthConfig      `mapstructure:"auth" yaml:"auth" json:"auth"`
+	Database    DatabaseConfig    `mapstructure:"database" yaml:"database" json:"database"`
+	Redis       RedisConfig       `mapstructure:"redis" yaml:"redis" json:"redis"`
+	Storage     StorageConfig     `mapstructure:"storage" yaml:"storage" json:"storage"`
+	Server      ServerConfig      `mapstructure:"server" yaml:"server" json:"server"`
+	Log         LogConfig         `mapstructure:"log" yaml:"log" json:"log"`
+	Embedding   EmbeddingConfig   `mapstructure:"embedding" yaml:"embedding" json:"embedding"`
+	Auth        AuthConfig        `mapstructure:"auth" yaml:"auth" json:"auth"`
+	PostProcess PostProcessConfig `mapstructure:"post_process" yaml:"post_process" json:"post_process"`
 }
 
 // DatabaseConfig holds database configuration
@@ -89,6 +90,15 @@ type AuthConfig struct {
 			RedirectURL  string `mapstructure:"redirect_url" yaml:"redirect_url" json:"redirect_url"`
 		} `mapstructure:"github" yaml:"github" json:"github"`
 	} `mapstructure:"oauth_providers" yaml:"oauth_providers" json:"oauth_providers"`
+}
+
+// PostProcessConfig holds web content post-processing configuration
+type PostProcessConfig struct {
+	Enabled      bool   `mapstructure:"enabled" yaml:"enabled" json:"enabled"`             // Enable post-processing
+	APIURL       string `mapstructure:"api_url" yaml:"api_url" json:"api_url"`             // OpenAI-compatible API URL
+	APIKey       string `mapstructure:"api_key" yaml:"api_key" json:"api_key"`             // API key
+	Model        string `mapstructure:"model" yaml:"model" json:"model"`                   // Model name (e.g., gpt-4o-mini)
+	CustomPrompt string `mapstructure:"custom_prompt" yaml:"custom_prompt" json:"custom_prompt"` // Custom prompt (optional, uses default if empty)
 }
 
 // Validate validates the configuration
@@ -179,4 +189,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.jwt_expiry", "24h")
 	v.SetDefault("auth.refresh_token_expiry", "168h")
 	v.SetDefault("auth.enable_oauth", false)
+
+	// Post-process defaults
+	v.SetDefault("post_process.enabled", false)
+	v.SetDefault("post_process.api_url", "https://api.openai.com/v1")
+	v.SetDefault("post_process.model", "gpt-4o-mini")
 }

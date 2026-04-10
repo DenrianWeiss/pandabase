@@ -21,6 +21,7 @@ import (
 	"pandabase/internal/chunker"
 	"pandabase/internal/db/models"
 	"pandabase/internal/parser"
+	"pandabase/internal/postprocess"
 	"pandabase/internal/storage"
 	"pandabase/pkg/plugin"
 )
@@ -30,6 +31,7 @@ type Processor struct {
 	db              *gorm.DB
 	storage         storage.Storage
 	embedder        plugin.Embedder
+	postProcessor   *postprocess.Service
 	logger          *logrus.Logger
 	httpClient      *http.Client
 	staticFetcher   URLFetcher
@@ -37,11 +39,12 @@ type Processor struct {
 }
 
 // NewProcessor creates a new task processor
-func NewProcessor(db *gorm.DB, storage storage.Storage, embedder plugin.Embedder, logger *logrus.Logger) *Processor {
+func NewProcessor(db *gorm.DB, storage storage.Storage, embedder plugin.Embedder, postProcessor *postprocess.Service, logger *logrus.Logger) *Processor {
 	return &Processor{
 		db:       db,
 		storage:  storage,
 		embedder: embedder,
+		postProcessor: postProcessor,
 		logger:   logger,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -118,6 +121,19 @@ func (p *Processor) handleDocumentProcess(ctx context.Context, task *asynq.Task)
 				} else {
 					finalFileName = "webpage.html"
 				}
+			}
+		}
+
+		// Apply post-processing for web content if enabled
+		if p.postProcessor != nil && p.postProcessor.IsEnabled() && payload.SourceURL != "" {
+			logger.Info("Applying post-processing to web content")
+			startTime := time.Now()
+			processedContent, err := p.postProcessor.Process(ctx, string(content))
+			if err != nil {
+				logger.WithError(err).Warn("Post-processing failed, using original content")
+			} else {
+				content = []byte(processedContent)
+				logger.WithField("duration", time.Since(startTime)).Info("Post-processing completed successfully")
 			}
 		}
 
@@ -237,18 +253,17 @@ func (p *Processor) handleDocumentProcess(ctx context.Context, task *asynq.Task)
 	}
 
 	// Handle title extraction/setting for web pages
-	if payload.SourceMetadata != nil {
-		autoExtractTitle, _ := payload.SourceMetadata["auto_extract_title"].(bool)
-		manualTitle, hasManualTitle := payload.SourceMetadata["title"].(string)
-
-		if hasManualTitle && manualTitle != "" {
-			// Use manually provided title
-			doc.Metadata["title"] = manualTitle
-		} else if autoExtractTitle {
-			// Auto-extract title from parsed document (already in doc.Metadata["title"] from web parser)
-			if extractedTitle, ok := doc.Metadata["title"].(string); !ok || extractedTitle == "" {
-				// Fallback to using the first line of content or filename
-				doc.Metadata["title"] = finalFileName
+	// For web content, always try to use the extracted title from the parser
+	if payload.SourceURL != "" {
+		// Web parser already extracts title into doc.Metadata["title"]
+		if extractedTitle, ok := doc.Metadata["title"].(string); !ok || extractedTitle == "" {
+			// If no title extracted, use the filename as fallback
+			doc.Metadata["title"] = finalFileName
+		}
+		// If user provided a manual title via SourceMetadata, override the extracted one
+		if payload.SourceMetadata != nil {
+			if manualTitle, hasManualTitle := payload.SourceMetadata["title"].(string); hasManualTitle && manualTitle != "" {
+				doc.Metadata["title"] = manualTitle
 			}
 		}
 	}

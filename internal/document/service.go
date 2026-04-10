@@ -313,6 +313,117 @@ func (s *Service) ImportURL(ctx context.Context, req ImportRequest) (*UploadResu
 	}, nil
 }
 
+// IngestText handles document ingestion directly from text
+func (s *Service) IngestText(ctx context.Context, namespaceID, userID uuid.UUID, filename, content string, opts UploadOptions) (*UploadResult, error) {
+	logger := s.logger.WithFields(logrus.Fields{
+		"namespace_id": namespaceID,
+		"user_id":      userID,
+		"filename":     filename,
+	})
+
+	logger.Info("Ingesting document from text")
+
+	// Check permission
+	if err := s.checkNamespacePermission(ctx, namespaceID, userID, "write"); err != nil {
+		return nil, err
+	}
+
+	contentBytes := []byte(content)
+	hash := calculateHash(contentBytes)
+
+	// Check for duplicate content
+	var existingDoc models.Document
+	if err := s.db.WithContext(ctx).Where("namespace_id = ? AND content_hash = ? AND status = ?",
+		namespaceID, hash, models.DocumentStatusCompleted).First(&existingDoc).Error; err == nil {
+		if !opts.ForceReprocess {
+			return &UploadResult{
+				DocumentID: existingDoc.ID,
+				Status:     existingDoc.Status,
+				Message:    "Document with same content already exists",
+			}, nil
+		}
+		if err := s.Delete(ctx, existingDoc.ID, namespaceID, userID, true); err != nil {
+			logger.WithError(err).Warn("Failed to delete existing document for reprocessing")
+		}
+	}
+
+	// Store text as a temporary file and save to storage
+	filePath, err := s.storage.Save(ctx, filename, strings.NewReader(content))
+	if err != nil {
+		return nil, fmt.Errorf("failed to save text: %w", err)
+	}
+
+	// Create document record
+	doc := models.Document{
+		NamespaceID: namespaceID,
+		SourceType:  "text",
+		SourceURI:   fmt.Sprintf("file://%s", filePath),
+		ContentHash: hash,
+		Status:      models.DocumentStatusPending,
+		Metadata: map[string]any{
+			"original_filename": filename,
+			"file_size":         len(contentBytes),
+			"uploaded_by":       userID,
+			"content_type":      "text/plain",
+			"chunk_size":        opts.ChunkSize,
+			"chunk_overlap":     opts.ChunkOverlap,
+			"parser_type":       opts.ParserType,
+		},
+	}
+
+	if err := s.db.WithContext(ctx).Create(&doc).Error; err != nil {
+		s.storage.Delete(ctx, filePath)
+		return nil, fmt.Errorf("failed to create document record: %w", err)
+	}
+
+	// Set default options
+	chunkSize := opts.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = 1000
+	}
+	chunkOverlap := opts.ChunkOverlap
+	if chunkOverlap < 0 {
+		chunkOverlap = 100
+	}
+
+	// Enqueue processing task
+	payload := queue.DocumentProcessPayload{
+		TaskPayload: queue.TaskPayload{
+			DocumentID:  doc.ID,
+			NamespaceID: namespaceID,
+			UserID:      userID,
+		},
+		FilePath:    filePath,
+		FileName:    filename,
+		ContentType: "text/plain",
+		Options: queue.ProcessingOptions{
+			ChunkSize:      chunkSize,
+			ChunkOverlap:   chunkOverlap,
+			ParserType:     opts.ParserType,
+			SkipEmbedding:  opts.SkipEmbedding,
+			ForceReprocess: opts.ForceReprocess,
+		},
+	}
+
+	taskInfo, err := s.queue.EnqueueDocumentProcess(ctx, payload, queue.DefaultTaskOptions()...)
+	if err != nil {
+		s.db.WithContext(ctx).Model(&doc).Update("status", models.DocumentStatusFailed)
+		return nil, fmt.Errorf("failed to enqueue processing task: %w", err)
+	}
+
+	logger.WithFields(logrus.Fields{
+		"document_id": doc.ID,
+		"task_id":     taskInfo.ID,
+	}).Info("Text ingestion successful, processing queued")
+
+	return &UploadResult{
+		DocumentID: doc.ID,
+		Status:     models.DocumentStatusPending,
+		TaskID:     taskInfo.ID,
+		Message:    "Document ingested and queued for processing",
+	}, nil
+}
+
 // UpdateRequest represents a document update request
 type UpdateRequest struct {
 	DocumentID  uuid.UUID
